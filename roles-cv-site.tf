@@ -19,7 +19,6 @@ locals {
 # Permissions boundary attached to every role the cv-site Pulumi stack creates (the Lambda
 # execution role). Even if the deploy role writes a broad inline policy, this caps it.
 resource "aws_iam_policy" "cv_site_boundary" {
-  #checkov:skip=CKV_AWS_355:kms:Decrypt uses Resource "*" but is limited by kms:ViaService to SSM; the AWS-managed aws/ssm key ARN is not known in advance
   name        = "cv-site-boundary"
   description = "Permissions boundary for IAM roles created by the cv-site stack."
   policy = jsonencode({
