@@ -83,6 +83,34 @@ run "cv_site_deploy_cannot_escalate_privileges" {
     error_message = "Every Allow statement granting iam:PassRole must be scoped to lambda.amazonaws.com via iam:PassedToService."
   }
 
+  # Fail-closed guard: no deploy Allow action may be a bare "*" or have a wildcard in its
+  # service prefix (e.g. an added {Effect=Allow, Action="*", Resource="*"} statement). The
+  # iam:-anchored guards above would not catch this on their own since the action isn't
+  # prefixed "iam:".
+  assert {
+    condition = alltrue([
+      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
+      !can(regex("^[^:]*\\*", a))
+    ])
+    error_message = "No deploy Allow action may be a bare wildcard or have a wildcard service prefix."
+  }
+
+  # Allow-list (not a pattern): every iam: action granted anywhere in the deploy policy must be
+  # one of these. Catches an unlisted iam: action (e.g. an unconditioned iam:SetDefaultPolicyVersion
+  # on Resource "*") that a pattern-based guard could miss.
+  assert {
+    condition = alltrue([
+      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
+      !startswith(a, "iam:") || contains([
+        "iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary",
+        "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateRoleDescription", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole",
+        "iam:PassRole",
+        "iam:GetPolicy", "iam:GetPolicyVersion",
+      ], a)
+    ])
+    error_message = "Deploy policy must only grant the explicit iam: allow-list; no unexpected iam: action."
+  }
+
   assert {
     condition = (
       one([for s in jsondecode(module.cv_site_deploy.policy).Statement : s if s.Sid == "DenyTouchingCiRoles"]).Effect == "Deny" &&
@@ -122,25 +150,54 @@ run "cv_site_deploy_cannot_escalate_privileges" {
     error_message = "The deploy role must deny all IAM actions (iam:*) on baseline-* roles."
   }
 
-  # SES identity-policy actions (PutIdentityPolicy, SetIdentityNotificationTopic, etc.) grant
-  # sending authorization to other accounts and must never be in the deploy role. No SES
-  # wildcard actions either.
+  # Allow-list (not a regex): exactly the eight SES actions the deploy role is granted today.
+  # SES identity-policy / notification actions (e.g. ses:PutIdentityPolicy,
+  # ses:SetIdentityNotificationTopic) grant sending authorization to other accounts or redirect
+  # bounce/complaint notifications and must never show up here; neither should any SES wildcard.
   assert {
     condition = alltrue([
-      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action]) :
-      !can(regex("(?i)^ses:.*(policy|policies)", a)) && !can(regex("^ses:.*\\*", a))
+      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
+      !startswith(a, "ses:") || contains([
+        "ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:PutEmailIdentityDkimAttributes",
+        "ses:TagResource", "ses:UntagResource", "ses:ListTagsForResource", "ses:ListEmailIdentities",
+      ], a)
     ])
-    error_message = "The deploy role must not manage SES sending-authorization policies or use SES wildcard actions."
+    error_message = "Deploy policy must only grant the explicit SES allow-list."
   }
 
-  # Lambda must be enumerated explicitly: no wildcard writes, and no function-URL or
-  # concurrency-deletion actions (both are extra attack surface not needed by the site).
+  # Allow-list (not a regex): exactly the lambda: actions the deploy role is granted today. No
+  # lambda:* wildcard, no function-URL actions, no unlisted action of any kind.
   assert {
     condition = alltrue([
-      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action]) :
-      a != "lambda:*" && a != "lambda:CreateFunctionUrlConfig" && a != "lambda:UpdateFunctionUrlConfig" && a != "lambda:DeleteFunctionConcurrency"
+      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
+      !startswith(a, "lambda:") || contains([
+        "lambda:Get*", "lambda:List*", "lambda:CreateFunction", "lambda:DeleteFunction",
+        "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion",
+        "lambda:PutFunctionConcurrency", "lambda:TagResource", "lambda:UntagResource",
+        "lambda:AddPermission", "lambda:RemovePermission",
+      ], a)
     ])
-    error_message = "The deploy role must not have a lambda:* wildcard or manage function URLs/concurrency deletion."
+    error_message = "Deploy policy must only grant the explicit lambda: allow-list."
+  }
+
+  # lambda:AddPermission/RemovePermission must only ever grant invoke access to API Gateway
+  # (Pulumi's aws.lambda.Permission for API Gateway always uses this principal).
+  assert {
+    condition = (
+      toset(flatten([one([for s in jsondecode(module.cv_site_deploy.policy).Statement : s if s.Sid == "SiteFunctionPermissions"]).Action])) == toset(["lambda:AddPermission", "lambda:RemovePermission"]) &&
+      one([for s in jsondecode(module.cv_site_deploy.policy).Statement : s if s.Sid == "SiteFunctionPermissions"]).Condition.StringEquals["lambda:Principal"] == "apigateway.amazonaws.com"
+    )
+    error_message = "lambda:AddPermission/RemovePermission must be scoped to exactly those two actions with principal apigateway.amazonaws.com."
+  }
+
+  # s3:CreateBucket must stay in its own, unconditioned statement (aws:ResourceAccount can't be
+  # evaluated against a bucket that doesn't exist yet) and grant nothing else.
+  assert {
+    condition = (
+      toset(flatten([one([for s in jsondecode(module.cv_site_deploy.policy).Statement : s if s.Sid == "CreateSiteBuckets"]).Action])) == toset(["s3:CreateBucket"]) &&
+      !contains(keys(one([for s in jsondecode(module.cv_site_deploy.policy).Statement : s if s.Sid == "CreateSiteBuckets"])), "Condition")
+    )
+    error_message = "s3:CreateBucket must be granted unconditionally, in a statement that grants only that action."
   }
 
   # The cv-site-* bucket ARN pattern is not account-scoped by itself; every S3 statement using

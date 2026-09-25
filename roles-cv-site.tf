@@ -32,15 +32,20 @@ resource "aws_iam_policy" "cv_site_boundary" {
   })
 }
 
-# Residual risk IAM cannot close: cv-site-deploy can create/retrust cv-site-* roles (trust
-# policy principals cannot be constrained by an IAM condition key) and can grant itself Lambda
-# resource-based permissions (lambda:AddPermission has no scoping condition key either). Both
-# are capped by the cv-site-boundary permissions boundary and otherwise depend on branch
-# protection on cv-site's main branch, since this role is only assumable from that branch's CI.
+# Residual risk IAM cannot close: cv-site-deploy can create/retrust cv-site-* roles' trust
+# policies (no IAM condition key constrains the Principal of a trust policy), so it could in
+# principle create a role trusted by a different, less-restricted identity. This is capped by
+# the cv-site-boundary permissions boundary on the role's own permissions (not its trust policy)
+# and otherwise depends on branch protection on cv-site's main branch, since this role is only
+# assumable from that branch's CI.
 locals {
   cv_site_deploy_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # s3:CreateBucket must stay unconditioned: the bucket doesn't exist yet when this action
+      # runs, so aws:ResourceAccount (a property of an existing resource) would not evaluate as
+      # expected. Creating a bucket always creates it in the caller's own account regardless.
+      { Sid = "CreateSiteBuckets", Effect = "Allow", Action = ["s3:CreateBucket"], Resource = local.cv_site_buckets },
       {
         Sid       = "SiteBuckets"
         Effect    = "Allow"
@@ -77,10 +82,18 @@ locals {
         Action = [
           "lambda:Get*", "lambda:List*", "lambda:CreateFunction", "lambda:DeleteFunction",
           "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion",
-          "lambda:AddPermission", "lambda:RemovePermission", "lambda:PutFunctionConcurrency",
-          "lambda:TagResource", "lambda:UntagResource",
+          "lambda:PutFunctionConcurrency", "lambda:TagResource", "lambda:UntagResource",
         ]
         Resource = local.cv_site_functions
+      },
+      # Pulumi's aws.lambda.Permission for API Gateway invocation always uses this principal;
+      # scoping it here means the deploy role can't grant invoke access to some other principal.
+      {
+        Sid       = "SiteFunctionPermissions"
+        Effect    = "Allow"
+        Action    = ["lambda:AddPermission", "lambda:RemovePermission"]
+        Resource  = local.cv_site_functions
+        Condition = { StringEquals = { "lambda:Principal" = "apigateway.amazonaws.com" } }
       },
       # API Gateway v2 only supports path-style resources, scoped here to the region's APIs.
       { Sid = "HttpApis", Effect = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"], Resource = local.cv_site_apis },
