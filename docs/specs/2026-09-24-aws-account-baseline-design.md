@@ -234,7 +234,7 @@ The shipped code is stricter than this spec in a few places, tightened during co
   effectively account-admin-equivalent; the real control is the `production` environment's
   required reviewer (see the README's accepted residual risks).
 - **checkov skips are narrower than a first pass suggested**: two skips were removed during review
-  (`e01d1a6`, `e3b9466`) because the checks either didn't fire in checkov 3.x or the skip
+  (`5967f51`, `30c260c`) because the checks either didn't fire in checkov 3.x or the skip
   description was misleading; only skips for checks that actually trigger remain, each with an
   inline justification.
 - **Lock-file handling is more involved than "just run terraform test"**: the committed
