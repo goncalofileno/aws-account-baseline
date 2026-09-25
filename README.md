@@ -153,19 +153,19 @@ Notes on the toolchain:
    gh secret set AWS_ROLE_PLAN --body "$(terraform output -raw baseline_plan_role_arn)"
    gh secret set AWS_ROLE_APPLY --body "$(terraform output -raw baseline_apply_role_arn)"
    gh secret set TF_STATE_BUCKET --body "$(terraform -chdir=bootstrap output -raw state_bucket)"
-   gh secret set ALERT_EMAIL --body "you@example.com"
+   gh secret set ALERT_EMAIL   # prompts for the address, so it never lands in shell history
    ```
    Also create environment `production` with yourself as required reviewer, deployable from
    `main` only.
 
    Dependabot's version-bump PRs only ever receive Dependabot's own secrets, not the repo's, so
-   without this the `plan` job (a required check) would fail on every Dependabot PR. Set the same
-   four secrets again, scoped to Dependabot:
+   without this the `plan` job (a required check) would fail on every Dependabot PR. Set the
+   three secrets `plan` needs again, scoped to Dependabot. `AWS_ROLE_APPLY` is not needed:
+   Dependabot never triggers `apply.yml`.
    ```bash
    gh secret set AWS_ROLE_PLAN --app dependabot --body "$(terraform output -raw baseline_plan_role_arn)"
-   gh secret set AWS_ROLE_APPLY --app dependabot --body "$(terraform output -raw baseline_apply_role_arn)"
    gh secret set TF_STATE_BUCKET --app dependabot --body "$(terraform -chdir=bootstrap output -raw state_bucket)"
-   gh secret set ALERT_EMAIL --app dependabot --body "you@example.com"
+   gh secret set ALERT_EMAIL --app dependabot   # prompts for the address
    ```
 6. Copy `cv_site_deploy_role_arn` and `cv_site_preview_role_arn` into the `cv-site` repo, also as
    **secrets** (same reasoning: both are ARNs embedding the account ID, and `cv-site` is public

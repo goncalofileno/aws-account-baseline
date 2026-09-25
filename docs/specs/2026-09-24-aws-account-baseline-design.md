@@ -185,9 +185,10 @@ the same run.
    not exist before this.
 5. In GitHub: create Environment `production` with a required reviewer; set repo **secrets**
    `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`, `TF_STATE_BUCKET` and `ALERT_EMAIL` (both repos are public,
-   so ARNs and the alert address must not be `vars`, which print unmasked in logs). Set the same
-   four secrets again scoped to Dependabot (`gh secret set NAME --app dependabot ...`), since
-   Dependabot PRs only receive Dependabot's own secrets and `plan` is a required check.
+   so ARNs and the alert address must not be `vars`, which print unmasked in logs). Set
+   `AWS_ROLE_PLAN`, `TF_STATE_BUCKET` and `ALERT_EMAIL` again scoped to Dependabot
+   (`gh secret set NAME --app dependabot ...`), since Dependabot PRs only receive Dependabot's
+   own secrets and `plan` is a required check.
 6. Copy the `cv_site_*_role_arn` outputs into the `cv-site` repo, also as secrets.
 
 (Budget email subscribers need no confirmation.)
@@ -228,8 +229,8 @@ The shipped code is stricter than this spec in a few places, tightened during co
 - **The CloudTrail bucket policy (via `modules/secure-bucket`) has no object-level access for
   `baseline-apply`** beyond what CloudTrail itself needs to write logs: Terraform never reads or
   writes trail objects, so the apply role's `s3:*` on the bucket ARN deliberately excludes the
-  `/*` object suffix. This is defence in depth, not a hard control — bucket-level `s3:*` already
-  lets the role delete the bucket, and combined with `iam:*` on its own role, `baseline-apply` is
+  `/*` object suffix. This is defence in depth, not a hard control — bucket-level `s3:*` still
+  lets the role rewrite the bucket policy or lifecycle rules, and combined with `iam:*` on its own role, `baseline-apply` is
   effectively account-admin-equivalent; the real control is the `production` environment's
   required reviewer (see the README's accepted residual risks).
 - **checkov skips are narrower than a first pass suggested**: two skips were removed during review
