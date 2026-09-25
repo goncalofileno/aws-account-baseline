@@ -8,3 +8,4 @@ tfplan
 crash.log
 plan-summary.md
 .DS_Store
+*.terraform.lock.hcl.orig
