@@ -1,8 +1,4 @@
 resource "aws_s3_bucket" "this" {
-  #checkov:skip=CKV_AWS_18:Access logging needs another bucket; not worth it for state/audit buckets in a personal account
-  #checkov:skip=CKV_AWS_144:Cross-region replication doubles cost for no real benefit in a personal account
-  #checkov:skip=CKV_AWS_145:SSE-S3 is sufficient; a customer-managed KMS key costs USD 1/month
-  #checkov:skip=CKV2_AWS_62:No consumer for S3 event notifications
   bucket = var.name
 }
 
