@@ -147,8 +147,9 @@ read/write on the state lockfile object (plan needs the lock).
 **Outputs:** `cv_site_deploy_role_arn`, `cv_site_preview_role_arn`, `baseline_plan_role_arn`,
 `baseline_apply_role_arn`, `cloudtrail_bucket`.
 
-`cv_site_*_role_arn` values are copied into the `cv-site` repo as GitHub Actions **variables**
-(not secrets; ARNs are not sensitive). This is the only interface between the two repos.
+`cv_site_*_role_arn` values are copied into the `cv-site` repo as GitHub Actions **secrets**, not
+variables: both repos are public, GitHub prints `vars` unmasked in `with:` inputs and substituted
+`run:` scripts, and an ARN embeds the account ID. This is the only interface between the two repos.
 
 ## 6. CI/CD
 
@@ -182,9 +183,12 @@ the same run.
 3. `cd bootstrap && terraform init && terraform apply` (local state).
 4. Root module: `terraform init` (S3 backend) and first `terraform apply` locally. CI roles do
    not exist before this.
-5. In GitHub: create Environment `production` with a required reviewer; set repo variables
-   `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`.
-6. Copy the `cv_site_*_role_arn` outputs into the `cv-site` repo variables.
+5. In GitHub: create Environment `production` with a required reviewer; set repo **secrets**
+   `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`, `TF_STATE_BUCKET` and `ALERT_EMAIL` (both repos are public,
+   so ARNs and the alert address must not be `vars`, which print unmasked in logs). Set the same
+   four secrets again scoped to Dependabot (`gh secret set NAME --app dependabot ...`), since
+   Dependabot PRs only receive Dependabot's own secrets and `plan` is a required check.
+6. Copy the `cv_site_*_role_arn` outputs into the `cv-site` repo, also as secrets.
 
 (Budget email subscribers need no confirmation.)
 
@@ -224,7 +228,10 @@ The shipped code is stricter than this spec in a few places, tightened during co
 - **The CloudTrail bucket policy (via `modules/secure-bucket`) has no object-level access for
   `baseline-apply`** beyond what CloudTrail itself needs to write logs: Terraform never reads or
   writes trail objects, so the apply role's `s3:*` on the bucket ARN deliberately excludes the
-  `/*` object suffix.
+  `/*` object suffix. This is defence in depth, not a hard control — bucket-level `s3:*` already
+  lets the role delete the bucket, and combined with `iam:*` on its own role, `baseline-apply` is
+  effectively account-admin-equivalent; the real control is the `production` environment's
+  required reviewer (see the README's accepted residual risks).
 - **checkov skips are narrower than a first pass suggested**: two skips were removed during review
   (`e01d1a6`, `e3b9466`) because the checks either didn't fire in checkov 3.x or the skip
   description was misleading; only skips for checks that actually trigger remain, each with an

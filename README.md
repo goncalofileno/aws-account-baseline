@@ -16,7 +16,7 @@ with mock providers and planned on the PR, then applied only after manual approv
 | `cv-site-boundary` policy | Permissions boundary: roles created by the site can only log, read their SSM parameters and send email |
 | `baseline-plan` / `baseline-apply` roles | This repo's own CI (plan on PRs; apply only from the protected `production` environment) |
 | `monthly-cost` budget | Email alerts at USD 2 forecast / USD 5 actual |
-| CloudTrail `baseline-management-events` | Multi-region audit trail with log file validation; logs kept 90 days |
+| CloudTrail `baseline-management-events` | Multi-region audit trail with log file validation; log objects expire after 90 days (noncurrent versions deleted 30 days after that) |
 
 ```mermaid
 flowchart LR
@@ -72,6 +72,14 @@ condition makes the corresponding test fail.
 - **`baseline-apply` manages `baseline-*` roles, including itself.** This repo's apply role can
   change its own and `baseline-plan`'s IAM. The mitigation is that every apply runs inside the
   `production` GitHub Environment, which requires a human reviewer before it executes.
+- **`baseline-apply` is effectively account-admin-equivalent.** It holds bucket-level `s3:*` on
+  the CloudTrail bucket and `iam:*` on its own role (see above), so withholding trail-object
+  access (below) is defence in depth, not a hard control — the real control on this role is the
+  same `production` environment reviewer.
+- **`cv-site-preview`'s `lambda:Get*` can read a function's environment variables.** Pulumi's
+  Lambda read calls return `Environment.Variables` in full, so anyone who can open a `cv-site`
+  pull request can read them. This means secrets must never be passed as Lambda environment
+  variables; they must stay in SSM (which `cv-site-preview` cannot read — see below).
 - **`baseline-plan` has `iam:Get*`/`iam:List*` on `*`.** Terraform's plan-time refresh reads the
   full IAM state of every resource already in state, and there is no condition key that restricts
   read-only IAM calls to specific resources the way write calls can be restricted. This includes
@@ -137,10 +145,31 @@ Notes on the toolchain:
    terraform init -backend-config="bucket=$(terraform -chdir=bootstrap output -raw state_bucket)"
    terraform plan -out=tfplan && terraform apply tfplan
    ```
-5. GitHub: set variables `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY` and `TF_STATE_BUCKET`, set the secret `ALERT_EMAIL`, and
-   create environment `production` with yourself as required reviewer, deployable from `main` only.
-6. Copy `cv_site_deploy_role_arn` and `cv_site_preview_role_arn` into the `cv-site` repo variables
-   `AWS_ROLE_DEPLOY` and `AWS_ROLE_PREVIEW`.
+5. GitHub: this repo is public, so `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`, `TF_STATE_BUCKET` and
+   `ALERT_EMAIL` must all be **secrets**, not variables — GitHub prints `vars` unmasked in `with:`
+   inputs and substituted `run:` scripts, and every one of these values is either an ARN
+   (which embeds the account ID) or the alert address. Set them with:
+   ```bash
+   gh secret set AWS_ROLE_PLAN --body "$(terraform output -raw baseline_plan_role_arn)"
+   gh secret set AWS_ROLE_APPLY --body "$(terraform output -raw baseline_apply_role_arn)"
+   gh secret set TF_STATE_BUCKET --body "$(terraform -chdir=bootstrap output -raw state_bucket)"
+   gh secret set ALERT_EMAIL --body "you@example.com"
+   ```
+   Also create environment `production` with yourself as required reviewer, deployable from
+   `main` only.
+
+   Dependabot's version-bump PRs only ever receive Dependabot's own secrets, not the repo's, so
+   without this the `plan` job (a required check) would fail on every Dependabot PR. Set the same
+   four secrets again, scoped to Dependabot:
+   ```bash
+   gh secret set AWS_ROLE_PLAN --app dependabot --body "$(terraform output -raw baseline_plan_role_arn)"
+   gh secret set AWS_ROLE_APPLY --app dependabot --body "$(terraform output -raw baseline_apply_role_arn)"
+   gh secret set TF_STATE_BUCKET --app dependabot --body "$(terraform -chdir=bootstrap output -raw state_bucket)"
+   gh secret set ALERT_EMAIL --app dependabot --body "you@example.com"
+   ```
+6. Copy `cv_site_deploy_role_arn` and `cv_site_preview_role_arn` into the `cv-site` repo, also as
+   **secrets** (same reasoning: both are ARNs embedding the account ID, and `cv-site` is public
+   too): `AWS_ROLE_DEPLOY` and `AWS_ROLE_PREVIEW`.
 
 ## Day-to-day changes
 
@@ -148,6 +177,10 @@ Open a PR, and CI posts a plan summary. Merge it, approve the `production` deplo
 
 ## Recovery
 
-- **Locked out of CI** (for example after a broken trust policy): run `terraform apply` locally with the SSO admin profile.
+- **Locked out of CI** (for example after a broken trust policy): run
+  `aws sso login --profile personal` then `terraform apply` locally with the SSO admin profile.
 - **Corrupted state**: the state bucket is versioned, so restore the previous version of
   `aws-account-baseline/terraform.tfstate`.
+- **Stale lock after a cancelled run**: `use_lockfile` leaves a `.tflock` object behind if a plan
+  or apply is killed mid-run. Run `terraform force-unlock <LOCK_ID>` (the ID is printed in the
+  error) locally with the SSO admin profile.

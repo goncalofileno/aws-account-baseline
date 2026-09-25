@@ -46,7 +46,11 @@ locals {
       { Sid = "Budgets", Effect = "Allow", Action = ["budgets:ModifyBudget", "budgets:ViewBudget", "budgets:TagResource", "budgets:UntagResource", "budgets:ListTagsForResource"], Resource = local.budget_arns },
       # Object-level access (the "/*" suffix) is deliberately withheld: Terraform never reads or
       # writes CloudTrail log objects (no force_destroy on this bucket), so apply has no
-      # legitimate reason to be able to overwrite or delete them.
+      # legitimate reason to be able to overwrite or delete them. This is defence in depth, not a
+      # hard control: bucket-level s3:* already lets this role delete the bucket itself (and,
+      # combined with ManagedIam's iam:* on its own role above, baseline-apply is effectively
+      # account-admin-equivalent). The real control is the production environment's required
+      # reviewer.
       { Sid = "TrailBucket", Effect = "Allow", Action = "s3:*", Resource = local.trail_bucket_arn },
     ]
   })
