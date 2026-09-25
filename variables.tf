@@ -19,3 +19,9 @@ variable "baseline_repo" {
   type        = string
   default     = "aws-account-baseline"
 }
+
+variable "cv_site_repo" {
+  description = "Name of the CV site repository on GitHub."
+  type        = string
+  default     = "cv-site"
+}

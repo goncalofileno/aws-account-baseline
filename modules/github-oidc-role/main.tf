@@ -27,6 +27,7 @@ resource "aws_iam_role" "this" {
 }
 
 resource "aws_iam_role_policy" "this" {
+  #checkov:skip=CKV_AWS_355:Policies are passed in by callers, documented in roles-*.tf and asserted by tests/*.tftest.hcl (boundary, deny statements, read-only checks)
   name   = "${var.name}-policy"
   role   = aws_iam_role.this.id
   policy = var.policy_json
