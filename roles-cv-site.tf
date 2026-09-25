@@ -32,11 +32,22 @@ resource "aws_iam_policy" "cv_site_boundary" {
   })
 }
 
+# Residual risk IAM cannot close: cv-site-deploy can create/retrust cv-site-* roles (trust
+# policy principals cannot be constrained by an IAM condition key) and can grant itself Lambda
+# resource-based permissions (lambda:AddPermission has no scoping condition key either). Both
+# are capped by the cv-site-boundary permissions boundary and otherwise depend on branch
+# protection on cv-site's main branch, since this role is only assumable from that branch's CI.
 locals {
   cv_site_deploy_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Sid = "SiteBuckets", Effect = "Allow", Action = "s3:*", Resource = local.cv_site_buckets },
+      {
+        Sid       = "SiteBuckets"
+        Effect    = "Allow"
+        Action    = "s3:*"
+        Resource  = local.cv_site_buckets
+        Condition = { StringEquals = { "aws:ResourceAccount" = local.account_id } }
+      },
       # CloudFront create actions do not support resource-level permissions.
       {
         Sid    = "CloudFront"
@@ -60,7 +71,17 @@ locals {
         Resource  = "*"
         Condition = { StringEquals = { "aws:RequestedRegion" = "us-east-1" } }
       },
-      { Sid = "SiteFunctions", Effect = "Allow", Action = "lambda:*", Resource = local.cv_site_functions },
+      {
+        Sid    = "SiteFunctions"
+        Effect = "Allow"
+        Action = [
+          "lambda:Get*", "lambda:List*", "lambda:CreateFunction", "lambda:DeleteFunction",
+          "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion",
+          "lambda:AddPermission", "lambda:RemovePermission", "lambda:PutFunctionConcurrency",
+          "lambda:TagResource", "lambda:UntagResource",
+        ]
+        Resource = local.cv_site_functions
+      },
       # API Gateway v2 only supports path-style resources, scoped here to the region's APIs.
       { Sid = "HttpApis", Effect = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"], Resource = local.cv_site_apis },
       {
@@ -78,7 +99,13 @@ locals {
       },
       { Sid = "DescribeParameters", Effect = "Allow", Action = ["ssm:DescribeParameters"], Resource = "*" },
       { Sid = "SsmKmsViaService", Effect = "Allow", Action = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"], Resource = "*", Condition = local.ssm_kms_condition },
-      { Sid = "SesIdentities", Effect = "Allow", Action = ["ses:*Identity*", "ses:VerifyDomainDkim", "ses:Get*", "ses:List*", "ses:TagResource", "ses:UntagResource"], Resource = "*" },
+      {
+        Sid      = "SesIdentityManagement"
+        Effect   = "Allow"
+        Action   = ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:PutEmailIdentityDkimAttributes", "ses:TagResource", "ses:UntagResource", "ses:ListTagsForResource"]
+        Resource = "arn:aws:ses:${var.region}:${local.account_id}:identity/*"
+      },
+      { Sid = "SesListIdentities", Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = "*" },
       {
         Sid       = "CreateRolesOnlyWithBoundary"
         Effect    = "Allow"
@@ -110,7 +137,13 @@ locals {
   cv_site_preview_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Sid = "S3ReadBucketConfig", Effect = "Allow", Action = ["s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration", "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration", "s3:ListBucket"], Resource = "arn:aws:s3:::cv-site-*" },
+      {
+        Sid       = "S3ReadBucketConfig"
+        Effect    = "Allow"
+        Action    = ["s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration", "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration", "s3:ListBucket"]
+        Resource  = "arn:aws:s3:::cv-site-*"
+        Condition = { StringEquals = { "aws:ResourceAccount" = local.account_id } }
+      },
       { Sid = "CloudFrontRead", Effect = "Allow", Action = ["cloudfront:Get*", "cloudfront:List*", "cloudfront:DescribeFunction"], Resource = "*" },
       { Sid = "AcmRead", Effect = "Allow", Action = ["acm:DescribeCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate"], Resource = "*" },
       { Sid = "LambdaRead", Effect = "Allow", Action = ["lambda:Get*", "lambda:List*"], Resource = local.cv_site_functions },
