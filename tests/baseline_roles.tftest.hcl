@@ -59,9 +59,11 @@ run "baseline_plan_only_writes_the_lock_file" {
 
   # True allow-list: every statement's Effect/Action/Resource must match exactly. Action and
   # Resource are normalised with flatten([...]) so a single string and a one-element list
-  # compare equal. None of these statements carry a Condition today; if one gains one, this
-  # assert's expected map must be updated to include it (a bare AWS-side test failure alone
-  # would otherwise not force this file to be revisited).
+  # compare equal. None of these statements carry a Condition today; the comparison only
+  # extracts Effect/Action/Resource, so a future statement gaining a Condition would need
+  # this assert extended on both sides (add Condition = s.Condition to the actual-side for
+  # expression below, and to the matching entry in the expected map) or its Condition would
+  # go entirely unchecked here.
   assert {
     condition = {
       for s in jsondecode(module.baseline_plan.policy).Statement :
@@ -113,8 +115,11 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
   # True allow-list: every statement's Effect/Action/Resource must match exactly. TrailBucket is
   # deliberately scoped to the bucket only (no "/*"): Terraform never reads or writes CloudTrail
   # log objects (no force_destroy), so apply has no legitimate reason to touch bucket objects.
-  # None of these statements carry a Condition today; if one gains one, this assert's expected
-  # map must be updated to include it.
+  # None of these statements carry a Condition today; the comparison only extracts
+  # Effect/Action/Resource, so a future statement gaining a Condition would need this assert
+  # extended on both sides (add Condition = s.Condition to the actual-side for expression
+  # below, and to the matching entry in the expected map) or its Condition would go entirely
+  # unchecked here.
   assert {
     condition = {
       for s in jsondecode(module.baseline_apply.policy).Statement :
