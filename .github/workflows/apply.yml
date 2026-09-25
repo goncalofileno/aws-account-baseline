@@ -3,6 +3,7 @@ name: apply
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
 
 permissions:
   contents: read
@@ -21,23 +22,27 @@ jobs:
     runs-on: ubuntu-latest
     # Required reviewer on this environment gates every apply.
     environment: production
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
     env:
       TF_VAR_github_owner: ${{ github.repository_owner }}
       TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+      TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
     steps:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4
         with:
+          terraform_version: "~1.16"
           terraform_wrapper: false
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_APPLY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_APPLY }}
           aws-region: eu-west-1
+          mask-aws-account-id: true
       - name: init
-        run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
       - name: plan
         run: |
           terraform plan -input=false -lock-timeout=60s -no-color -out=tfplan > /dev/null
