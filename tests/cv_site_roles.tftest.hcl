@@ -278,3 +278,223 @@ run "cv_site_preview_is_read_only" {
     error_message = "Preview's S3 bucket statement must be scoped to this account via aws:ResourceAccount."
   }
 }
+
+# The allow-list/pattern asserts above catch specific escalation shapes, but none of them pin
+# every statement's Resource. A mutation broadening ManageSiteRoles or PassSiteRolesToLambda to
+# Resource = "*", or SiteBuckets to "arn:aws:s3:::*", passed every assert above. This run follows
+# the exact ordered Sid list + exact per-Sid {Effect, Action, Resource, Condition} map pattern
+# from tests/baseline_roles.tftest.hcl so every statement, not just the ones a targeted guard
+# happens to name, is pinned.
+run "cv_site_deploy_policy_matches_exactly" {
+  command = apply
+
+  # Fail-closed format guard: every deploy Allow action must be "<service>:<Word>", service one
+  # of the ones this policy actually uses, and the action part letters/asterisks only (no digits,
+  # no "?", case-sensitive). Catches a mutated action like "IAM:*" (wrong case) or "i?m:*"
+  # (a wildcard-masked service prefix) that the bare-wildcard guard above does not check for.
+  assert {
+    condition = alltrue([
+      for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
+      can(regex("^(s3|cloudfront|acm|lambda|apigateway|logs|ssm|kms|ses|iam):[A-Za-z*]+$", a))
+    ])
+    error_message = "Every deploy Allow action must match <known-service>:<Word-or-*>, case-sensitive, no digits or '?'."
+  }
+
+  # Exact, ordered statement list: catches any added, removed, renamed or reordered statement.
+  assert {
+    condition = [for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Sid] == [
+      "CreateSiteBuckets", "SiteBuckets", "CloudFront", "AcmForCloudFront", "SiteFunctions",
+      "SiteFunctionPermissions", "HttpApis", "SiteLogGroups", "DescribeLogGroups", "SiteParameters",
+      "DescribeParameters", "SsmKmsViaService", "SesIdentityManagement", "SesListIdentities",
+      "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
+      "DenyTouchingCiRoles", "DenyRemovingBoundary", "DenyChangingBoundaryPolicy", "DenyBaselineRoles",
+    ]
+    error_message = "cv-site-deploy policy must declare exactly these statements, in this order."
+  }
+
+  # True allow-list: every statement's Effect/Action/Resource/Condition must match exactly.
+  # Action and Resource are normalised with flatten([...]) so a single string and a one-element
+  # list compare equal; Condition uses try(s.Condition, null) so a statement with no Condition
+  # compares equal to a literal `null` on the expected side. A statement gaining or losing a
+  # Condition, or a Resource broadened to "*"/a wider ARN pattern, fails this assert.
+  assert {
+    condition = {
+      for s in jsondecode(module.cv_site_deploy.policy).Statement :
+      s.Sid => { Effect = s.Effect, Action = flatten([s.Action]), Resource = flatten([s.Resource]), Condition = try(s.Condition, null) }
+      } == {
+      CreateSiteBuckets = {
+        Effect    = "Allow", Action = ["s3:CreateBucket"]
+        Resource  = ["arn:aws:s3:::cv-site-*", "arn:aws:s3:::cv-site-*/*"]
+        Condition = null
+      }
+      SiteBuckets = {
+        Effect    = "Allow", Action = ["s3:*"]
+        Resource  = ["arn:aws:s3:::cv-site-*", "arn:aws:s3:::cv-site-*/*"]
+        Condition = { StringEquals = { "aws:ResourceAccount" = "123456789012" } }
+      }
+      CloudFront = {
+        Effect = "Allow"
+        Action = [
+          "cloudfront:CreateDistribution", "cloudfront:CreateDistributionWithTags", "cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution",
+          "cloudfront:CreateInvalidation", "cloudfront:TagResource", "cloudfront:UntagResource",
+          "cloudfront:CreateFunction", "cloudfront:UpdateFunction", "cloudfront:DeleteFunction", "cloudfront:PublishFunction", "cloudfront:DescribeFunction", "cloudfront:TestFunction",
+          "cloudfront:CreateOriginAccessControl", "cloudfront:UpdateOriginAccessControl", "cloudfront:DeleteOriginAccessControl",
+          "cloudfront:CreateResponseHeadersPolicy", "cloudfront:UpdateResponseHeadersPolicy", "cloudfront:DeleteResponseHeadersPolicy",
+          "cloudfront:CreateCachePolicy", "cloudfront:UpdateCachePolicy", "cloudfront:DeleteCachePolicy",
+          "cloudfront:CreateOriginRequestPolicy", "cloudfront:UpdateOriginRequestPolicy", "cloudfront:DeleteOriginRequestPolicy",
+          "cloudfront:Get*", "cloudfront:List*",
+        ]
+        Resource  = ["*"]
+        Condition = null
+      }
+      AcmForCloudFront = {
+        Effect    = "Allow"
+        Action    = ["acm:RequestCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate", "acm:AddTagsToCertificate", "acm:RemoveTagsFromCertificate"]
+        Resource  = ["*"]
+        Condition = { StringEquals = { "aws:RequestedRegion" = "us-east-1" } }
+      }
+      SiteFunctions = {
+        Effect = "Allow"
+        Action = [
+          "lambda:Get*", "lambda:List*", "lambda:CreateFunction", "lambda:DeleteFunction",
+          "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion",
+          "lambda:PutFunctionConcurrency", "lambda:TagResource", "lambda:UntagResource",
+        ]
+        Resource  = ["arn:aws:lambda:eu-west-1:123456789012:function:cv-site-*"]
+        Condition = null
+      }
+      SiteFunctionPermissions = {
+        Effect    = "Allow", Action = ["lambda:AddPermission", "lambda:RemovePermission"]
+        Resource  = ["arn:aws:lambda:eu-west-1:123456789012:function:cv-site-*"]
+        Condition = { StringEquals = { "lambda:Principal" = "apigateway.amazonaws.com" } }
+      }
+      HttpApis = {
+        Effect    = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
+        Resource  = ["arn:aws:apigateway:eu-west-1::/apis", "arn:aws:apigateway:eu-west-1::/apis/*", "arn:aws:apigateway:eu-west-1::/tags/*"]
+        Condition = null
+      }
+      SiteLogGroups = {
+        Effect    = "Allow"
+        Action    = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:DeleteRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource", "logs:TagLogGroup", "logs:ListTagsLogGroup"]
+        Resource  = ["arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/cv-site-*", "arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/cv-site-*:*"]
+        Condition = null
+      }
+      DescribeLogGroups = { Effect = "Allow", Action = ["logs:DescribeLogGroups"], Resource = ["*"], Condition = null }
+      SiteParameters = {
+        Effect    = "Allow"
+        Action    = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:DeleteParameter", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:ListTagsForResource", "ssm:LabelParameterVersion"]
+        Resource  = ["arn:aws:ssm:eu-west-1:123456789012:parameter/cv-site/*"]
+        Condition = null
+      }
+      DescribeParameters = { Effect = "Allow", Action = ["ssm:DescribeParameters"], Resource = ["*"], Condition = null }
+      SsmKmsViaService = {
+        Effect    = "Allow", Action = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
+        Resource  = ["*"]
+        Condition = { StringEquals = { "kms:ViaService" = "ssm.eu-west-1.amazonaws.com" } }
+      }
+      SesIdentityManagement = {
+        Effect    = "Allow"
+        Action    = ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:PutEmailIdentityDkimAttributes", "ses:TagResource", "ses:UntagResource", "ses:ListTagsForResource"]
+        Resource  = ["arn:aws:ses:eu-west-1:123456789012:identity/*"]
+        Condition = null
+      }
+      SesListIdentities = { Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = ["*"], Condition = null }
+      CreateRolesOnlyWithBoundary = {
+        Effect    = "Allow"
+        Action    = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
+        Resource  = ["arn:aws:iam::123456789012:role/cv-site-*"]
+        Condition = { StringEquals = { "iam:PermissionsBoundary" = aws_iam_policy.cv_site_boundary.arn } }
+      }
+      ManageSiteRoles = {
+        Effect    = "Allow"
+        Action    = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateRoleDescription", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole"]
+        Resource  = ["arn:aws:iam::123456789012:role/cv-site-*"]
+        Condition = null
+      }
+      PassSiteRolesToLambda = {
+        Effect    = "Allow", Action = ["iam:PassRole"]
+        Resource  = ["arn:aws:iam::123456789012:role/cv-site-*"]
+        Condition = { StringEquals = { "iam:PassedToService" = "lambda.amazonaws.com" } }
+      }
+      ReadBoundaryPolicy = {
+        Effect    = "Allow", Action = ["iam:GetPolicy", "iam:GetPolicyVersion"]
+        Resource  = [aws_iam_policy.cv_site_boundary.arn]
+        Condition = null
+      }
+      DenyTouchingCiRoles = {
+        Effect = "Deny", Action = ["iam:*"]
+        Resource = [
+          "arn:aws:iam::123456789012:role/cv-site-deploy",
+          "arn:aws:iam::123456789012:role/cv-site-preview",
+        ]
+        Condition = null
+      }
+      DenyRemovingBoundary = {
+        Effect    = "Deny", Action = ["iam:DeleteRolePermissionsBoundary"]
+        Resource  = ["arn:aws:iam::123456789012:role/cv-site-*"]
+        Condition = null
+      }
+      DenyChangingBoundaryPolicy = {
+        Effect    = "Deny"
+        Action    = ["iam:CreatePolicyVersion", "iam:DeletePolicy", "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion"]
+        Resource  = [aws_iam_policy.cv_site_boundary.arn]
+        Condition = null
+      }
+      DenyBaselineRoles = {
+        Effect    = "Deny", Action = ["iam:*"]
+        Resource  = ["arn:aws:iam::123456789012:role/baseline-*"]
+        Condition = null
+      }
+    }
+    error_message = "cv-site-deploy policy statements must match exactly (Effect, Action, Resource, Condition) — no broadening, no extra actions or resources on any statement."
+  }
+}
+
+run "cv_site_preview_policy_matches_exactly" {
+  command = apply
+
+  # Exact, ordered statement list: catches any added, removed, renamed or reordered statement
+  # (e.g. a smuggled-in write action hidden behind a new Sid).
+  assert {
+    condition = [for s in jsondecode(module.cv_site_preview.policy).Statement : s.Sid] == [
+      "S3ReadBucketConfig", "CloudFrontRead", "AcmRead", "LambdaRead", "ApiRead", "LogsRead", "SsmMetadataRead", "SesRead", "IamRead",
+    ]
+    error_message = "cv-site-preview policy must declare exactly these statements, in this order."
+  }
+
+  # True allow-list: every statement's Effect/Action/Resource/Condition must match exactly.
+  assert {
+    condition = {
+      for s in jsondecode(module.cv_site_preview.policy).Statement :
+      s.Sid => { Effect = s.Effect, Action = flatten([s.Action]), Resource = flatten([s.Resource]), Condition = try(s.Condition, null) }
+      } == {
+      S3ReadBucketConfig = {
+        Effect    = "Allow"
+        Action    = ["s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration", "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration", "s3:ListBucket"]
+        Resource  = ["arn:aws:s3:::cv-site-*"]
+        Condition = { StringEquals = { "aws:ResourceAccount" = "123456789012" } }
+      }
+      CloudFrontRead = { Effect = "Allow", Action = ["cloudfront:Get*", "cloudfront:List*", "cloudfront:DescribeFunction"], Resource = ["*"], Condition = null }
+      AcmRead        = { Effect = "Allow", Action = ["acm:DescribeCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate"], Resource = ["*"], Condition = null }
+      LambdaRead = {
+        Effect    = "Allow", Action = ["lambda:Get*", "lambda:List*"]
+        Resource  = ["arn:aws:lambda:eu-west-1:123456789012:function:cv-site-*"]
+        Condition = null
+      }
+      ApiRead = {
+        Effect    = "Allow", Action = ["apigateway:GET"]
+        Resource  = ["arn:aws:apigateway:eu-west-1::/apis", "arn:aws:apigateway:eu-west-1::/apis/*", "arn:aws:apigateway:eu-west-1::/tags/*"]
+        Condition = null
+      }
+      LogsRead        = { Effect = "Allow", Action = ["logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = ["*"], Condition = null }
+      SsmMetadataRead = { Effect = "Allow", Action = ["ssm:DescribeParameters", "ssm:ListTagsForResource"], Resource = ["*"], Condition = null }
+      SesRead         = { Effect = "Allow", Action = ["ses:Get*", "ses:List*"], Resource = ["*"], Condition = null }
+      IamRead = {
+        Effect    = "Allow", Action = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"]
+        Resource  = ["arn:aws:iam::123456789012:role/cv-site-*"]
+        Condition = null
+      }
+    }
+    error_message = "cv-site-preview policy statements must match exactly (Effect, Action, Resource, Condition) — no broadening, no extra actions or resources on any statement."
+  }
+}
