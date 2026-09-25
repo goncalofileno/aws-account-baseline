@@ -1,5 +1,5 @@
 TF   ?= terraform
-DIRS ?= .
+DIRS ?= . bootstrap
 
 .PHONY: fmt fmt-check init validate lint security test check
 
