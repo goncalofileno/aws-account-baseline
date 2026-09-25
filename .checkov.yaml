@@ -1,0 +1,10 @@
+directory:
+  - .
+framework:
+  - terraform
+  - github_actions
+compact: true
+quiet: true
+download-external-modules: false
+skip-path:
+  - \.terraform
