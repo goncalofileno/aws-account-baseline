@@ -1,3 +1,12 @@
+
+# Accepted trade-offs for this module (not checkov findings, so no #checkov:skip is attached):
+# - No access logging: would need a second bucket per bucket using this module, for buckets that
+#   hold either CI-generated state or CloudTrail's own logs.
+# - No cross-region replication: adds ongoing storage cost for personal-account data that doesn't
+#   need it.
+# - SSE-S3 (AES256) instead of a customer-managed KMS key: a CMK is about USD 1/month; SSE-S3 is
+#   free and already encrypts at rest.
+# - No event notifications: nothing in this account consumes them.
 resource "aws_s3_bucket" "this" {
   bucket = var.name
 }
