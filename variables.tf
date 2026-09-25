@@ -25,3 +25,14 @@ variable "cv_site_repo" {
   type        = string
   default     = "cv-site"
 }
+
+variable "alert_email" {
+  description = "Email address that receives AWS Budget alerts."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be a valid email address."
+  }
+}

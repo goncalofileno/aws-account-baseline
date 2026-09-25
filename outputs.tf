@@ -17,3 +17,8 @@ output "baseline_apply_role_arn" {
   description = "Set as AWS_ROLE_APPLY in this repo's GitHub variables."
   value       = module.baseline_apply.arn
 }
+
+output "cloudtrail_bucket" {
+  description = "S3 bucket receiving CloudTrail logs."
+  value       = module.cloudtrail_bucket.name
+}

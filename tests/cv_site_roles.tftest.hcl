@@ -8,6 +8,7 @@ mock_provider "aws" {
 
 variables {
   github_owner = "test-owner"
+  alert_email  = "alerts@example.com"
 }
 
 run "cv_site_roles_trust_only_the_expected_subjects" {
