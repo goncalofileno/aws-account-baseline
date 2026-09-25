@@ -37,32 +37,9 @@ run "baseline_roles_trust_only_the_expected_subjects" {
 run "baseline_plan_only_writes_the_lock_file" {
   command = apply
 
-  assert {
-    condition = alltrue([
-      for s in jsondecode(module.baseline_plan.policy).Statement :
-      !anytrue([for a in flatten([s.Action]) : contains(["s3:PutObject", "s3:DeleteObject"], a)]) ||
-      alltrue([for r in flatten([s.Resource]) : endswith(r, ".tflock")])
-    ])
-    error_message = "baseline-plan may only write/delete the state lock file."
-  }
-
-  assert {
-    condition = alltrue([
-      for a in flatten([for s in jsondecode(module.baseline_plan.policy).Statement : s.Action]) :
-      can(regex("^[a-z0-9-]+:(Get|List|Describe|View)", a)) || contains(["s3:PutObject", "s3:DeleteObject"], a)
-    ])
-    error_message = "baseline-plan must otherwise be read-only."
-  }
-
-  assert {
-    condition     = contains(one([for s in jsondecode(module.baseline_plan.policy).Statement : s if s.Sid == "StateLock"]).Resource, "arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate.tflock")
-    error_message = "Lock file permissions must target the state key's .tflock object."
-  }
-
-  # Fail-closed guard: no plan Allow action may be a bare "*" or have a wildcard in its service
-  # prefix. None of the guards above look at an action outside the s3:PutObject/DeleteObject and
-  # Get/List/Describe/View patterns, so a bare {Effect=Allow, Action="*", Resource="*"} statement
-  # would otherwise slip through untested.
+  # Fail-closed guard, kept as a readable first line of defence even though the exact
+  # comparison below subsumes it: no plan Allow action may be a bare "*" or have a wildcard
+  # in its service prefix.
   assert {
     condition = alltrue([
       for a in flatten([for s in jsondecode(module.baseline_plan.policy).Statement : s.Action if s.Effect == "Allow"]) :
@@ -71,54 +48,50 @@ run "baseline_plan_only_writes_the_lock_file" {
     error_message = "No plan Allow action may be a bare wildcard or have a wildcard service prefix."
   }
 
-  # Allow-list (not a pattern): every action granted must be one of the exact actions the plan
-  # policy is meant to carry. Catches an unlisted action that still happens to match the
-  # Get/List/Describe/View prefix pattern above (e.g. a broader read permission on a service the
-  # plan role has no business reading).
+  # Exact, ordered statement list: catches any added, removed, renamed or reordered statement
+  # (e.g. a new Sid smuggling in an extra grant).
   assert {
-    condition = alltrue([
-      for a in flatten([for s in jsondecode(module.baseline_plan.policy).Statement : s.Action if s.Effect == "Allow"]) :
-      contains([
-        "s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
-        "iam:Get*", "iam:List*",
-        "cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*",
-        "budgets:ViewBudget", "budgets:ListTagsForResource",
-        "s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration",
-        "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration",
-      ], a)
-    ])
-    error_message = "baseline-plan must only grant the explicit action allow-list."
+    condition = [for s in jsondecode(module.baseline_plan.policy).Statement : s.Sid] == [
+      "StateList", "StateRead", "StateLock", "IamRead", "CloudTrailRead", "BudgetsRead", "TrailBucketConfigRead",
+    ]
+    error_message = "baseline-plan policy must declare exactly these statements, in this order."
   }
 
+  # True allow-list: every statement's Effect/Action/Resource must match exactly. Action and
+  # Resource are normalised with flatten([...]) so a single string and a one-element list
+  # compare equal. None of these statements carry a Condition today; if one gains one, this
+  # assert's expected map must be updated to include it (a bare AWS-side test failure alone
+  # would otherwise not force this file to be revisited).
   assert {
-    condition = (
-      one([for s in jsondecode(module.baseline_plan.policy).Statement : s if s.Sid == "StateRead"]).Action == ["s3:GetObject"] &&
-      one([for s in jsondecode(module.baseline_plan.policy).Statement : s if s.Sid == "StateRead"]).Resource == "arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate"
-    )
-    error_message = "StateRead must be exactly s3:GetObject on the state key, nothing broader."
+    condition = {
+      for s in jsondecode(module.baseline_plan.policy).Statement :
+      s.Sid => { Effect = s.Effect, Action = flatten([s.Action]), Resource = flatten([s.Resource]) }
+      } == {
+      StateList      = { Effect = "Allow", Action = ["s3:ListBucket"], Resource = ["arn:aws:s3:::gf-tfstate-123456789012"] }
+      StateRead      = { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate"] }
+      StateLock      = { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], Resource = ["arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate.tflock"] }
+      IamRead        = { Effect = "Allow", Action = ["iam:Get*", "iam:List*"], Resource = ["*"] }
+      CloudTrailRead = { Effect = "Allow", Action = ["cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*"], Resource = ["*"] }
+      BudgetsRead    = { Effect = "Allow", Action = ["budgets:ViewBudget", "budgets:ListTagsForResource"], Resource = ["arn:aws:budgets::123456789012:budget/*"] }
+      TrailBucketConfigRead = {
+        Effect = "Allow"
+        Action = [
+          "s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration",
+          "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration", "s3:ListBucket",
+        ]
+        Resource = ["arn:aws:s3:::gf-cloudtrail-123456789012"]
+      }
+    }
+    error_message = "baseline-plan policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }
 }
 
 run "baseline_apply_is_scoped_to_baseline_resources" {
   command = apply
 
-  assert {
-    condition = one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "ManagedIam"]).Resource == [
-      "arn:aws:iam::123456789012:role/cv-site-*",
-      "arn:aws:iam::123456789012:role/baseline-*",
-      "arn:aws:iam::123456789012:policy/cv-site-*",
-    ]
-    error_message = "baseline-apply may only manage cv-site-* and baseline-* IAM resources."
-  }
-
-  assert {
-    condition     = one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "CloudTrailManage"]).Resource == "arn:aws:cloudtrail:eu-west-1:123456789012:trail/baseline-management-events"
-    error_message = "baseline-apply may only manage the baseline trail."
-  }
-
-  # Fail-closed guard: no apply Allow action may be a bare "*" or have a wildcard in its service
-  # prefix (this does not flag legitimate action-level wildcards like "iam:*" or "s3:*", since
-  # their "*" falls after the colon, not in the service prefix).
+  # Fail-closed guard, kept as a readable first line of defence even though the exact
+  # comparison below subsumes it (this does not flag legitimate action-level wildcards like
+  # "iam:*" or "s3:*", since their "*" falls after the colon, not in the service prefix).
   assert {
     condition = alltrue([
       for a in flatten([for s in jsondecode(module.baseline_apply.policy).Statement : s.Action if s.Effect == "Allow"]) :
@@ -127,53 +100,49 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
     error_message = "No apply Allow action may be a bare wildcard or have a wildcard service prefix."
   }
 
-  # iam:* is uniquely powerful (it can touch every IAM resource type, not just roles/policies);
-  # it must only ever appear on the ManagedIam statement, whose Resource list is asserted above.
+  # Exact, ordered statement list: catches any added, removed, renamed or reordered statement
+  # (e.g. a smuggled-in extra IAM-management statement).
   assert {
-    condition = alltrue([
-      for s in jsondecode(module.baseline_apply.policy).Statement :
-      !(s.Effect == "Allow" && contains(flatten([s.Action]), "iam:*")) || s.Sid == "ManagedIam"
-    ])
-    error_message = "iam:* may only appear in the ManagedIam statement."
-  }
-
-  assert {
-    condition = alltrue([
-      for s in jsondecode(module.baseline_apply.policy).Statement :
-      !(s.Effect == "Allow" && contains(flatten([s.Action]), "cloudtrail:*")) || s.Sid == "CloudTrailManage"
-    ])
-    error_message = "cloudtrail:* may only appear in the CloudTrailManage statement."
-  }
-
-  assert {
-    condition = alltrue([
-      for s in jsondecode(module.baseline_apply.policy).Statement :
-      !(s.Effect == "Allow" && contains(flatten([s.Action]), "s3:*")) || s.Sid == "TrailBucket"
-    ])
-    error_message = "s3:* may only appear in the TrailBucket statement."
-  }
-
-  assert {
-    condition = one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "TrailBucket"]).Resource == [
-      "arn:aws:s3:::gf-cloudtrail-123456789012",
-      "arn:aws:s3:::gf-cloudtrail-123456789012/*",
+    condition = [for s in jsondecode(module.baseline_apply.policy).Statement : s.Sid] == [
+      "StateList", "StateReadWrite", "StateLock", "IamRead", "GithubOidcProvider", "ManagedIam",
+      "CloudTrailManage", "CloudTrailRead", "Budgets", "TrailBucket",
     ]
-    error_message = "TrailBucket must be scoped to exactly the trail bucket and its objects."
+    error_message = "baseline-apply policy must declare exactly these statements, in this order."
   }
 
-  # State access (list/read-write/lock) must stay confined to the state key and its lock object,
-  # never a bucket-wide "*" resource.
+  # True allow-list: every statement's Effect/Action/Resource must match exactly. TrailBucket is
+  # deliberately scoped to the bucket only (no "/*"): Terraform never reads or writes CloudTrail
+  # log objects (no force_destroy), so apply has no legitimate reason to touch bucket objects.
+  # None of these statements carry a Condition today; if one gains one, this assert's expected
+  # map must be updated to include it.
   assert {
-    condition = (
-      one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "StateList"]).Resource == "arn:aws:s3:::gf-tfstate-123456789012" &&
-      one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "StateReadWrite"]).Resource == "arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate" &&
-      contains(one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "StateLock"]).Resource, "arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate.tflock")
-    )
-    error_message = "State access must be confined to the state bucket listing, the state key and its lock object."
-  }
-
-  assert {
-    condition     = one([for s in jsondecode(module.baseline_apply.policy).Statement : s if s.Sid == "Budgets"]).Resource == "arn:aws:budgets::123456789012:budget/*"
-    error_message = "Budgets access must be scoped to budget/*."
+    condition = {
+      for s in jsondecode(module.baseline_apply.policy).Statement :
+      s.Sid => { Effect = s.Effect, Action = flatten([s.Action]), Resource = flatten([s.Resource]) }
+      } == {
+      StateList      = { Effect = "Allow", Action = ["s3:ListBucket"], Resource = ["arn:aws:s3:::gf-tfstate-123456789012"] }
+      StateReadWrite = { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = ["arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate"] }
+      StateLock      = { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], Resource = ["arn:aws:s3:::gf-tfstate-123456789012/aws-account-baseline/terraform.tfstate.tflock"] }
+      IamRead        = { Effect = "Allow", Action = ["iam:Get*", "iam:List*"], Resource = ["*"] }
+      GithubOidcProvider = {
+        Effect   = "Allow"
+        Action   = ["iam:*OpenIDConnectProvider*"]
+        Resource = ["arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"]
+      }
+      ManagedIam = {
+        Effect = "Allow"
+        Action = ["iam:*"]
+        Resource = [
+          "arn:aws:iam::123456789012:role/cv-site-*",
+          "arn:aws:iam::123456789012:role/baseline-*",
+          "arn:aws:iam::123456789012:policy/cv-site-*",
+        ]
+      }
+      CloudTrailManage = { Effect = "Allow", Action = ["cloudtrail:*"], Resource = ["arn:aws:cloudtrail:eu-west-1:123456789012:trail/baseline-management-events"] }
+      CloudTrailRead   = { Effect = "Allow", Action = ["cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*"], Resource = ["*"] }
+      Budgets          = { Effect = "Allow", Action = ["budgets:ModifyBudget", "budgets:ViewBudget", "budgets:TagResource", "budgets:UntagResource", "budgets:ListTagsForResource"], Resource = ["arn:aws:budgets::123456789012:budget/*"] }
+      TrailBucket      = { Effect = "Allow", Action = ["s3:*"], Resource = ["arn:aws:s3:::gf-cloudtrail-123456789012"] }
+    }
+    error_message = "baseline-apply policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }
 }

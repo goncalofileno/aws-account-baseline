@@ -44,7 +44,10 @@ locals {
       { Sid = "CloudTrailManage", Effect = "Allow", Action = "cloudtrail:*", Resource = local.trail_arn },
       { Sid = "CloudTrailRead", Effect = "Allow", Action = ["cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*"], Resource = "*" },
       { Sid = "Budgets", Effect = "Allow", Action = ["budgets:ModifyBudget", "budgets:ViewBudget", "budgets:TagResource", "budgets:UntagResource", "budgets:ListTagsForResource"], Resource = local.budget_arns },
-      { Sid = "TrailBucket", Effect = "Allow", Action = "s3:*", Resource = [local.trail_bucket_arn, "${local.trail_bucket_arn}/*"] },
+      # Object-level access (the "/*" suffix) is deliberately withheld: Terraform never reads or
+      # writes CloudTrail log objects (no force_destroy on this bucket), so apply has no
+      # legitimate reason to be able to overwrite or delete them.
+      { Sid = "TrailBucket", Effect = "Allow", Action = "s3:*", Resource = local.trail_bucket_arn },
     ]
   })
 }
