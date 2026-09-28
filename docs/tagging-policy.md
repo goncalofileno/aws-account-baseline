@@ -46,17 +46,18 @@ AWS resources (e.g. the ACM certificate). Its `ManagedBy` is `pulumi` and its `R
   `bootstrap/tests/bootstrap.tftest.hcl` each assert the exact tag map the corresponding root
   produces. All of this runs under `terraform test`/`tofu test` with mock providers, so it's
   checked on every PR before anything is ever applied.
-- **Pulumi (`cv-site`):** the same values are set once through the AWS provider's `defaultTags`
+- **Pulumi (`cv-site`), planned and not built yet:** the `cv-site` implementation plan will set the same values once through the AWS provider's `defaultTags`
   (default provider and the `us-east-1` provider used for the CloudFront/ACM certificate), with
   `Component` set per module (`site.ts` → `web`, `contact-api.ts` → `contact-api`, DNS-adjacent
-  resources → `dns`). An infra unit test (Pulumi mocks) asserts that every taggable AWS resource the
+  resources → `dns`). An infra unit test (Pulumi mocks) will assert that every taggable AWS resource the
   program creates carries all six keys with allowed values, the same allow-list/exact-match style
   used here.
 
 ## Known gaps: non-taggable resources
 
 A handful of sub-resources this repo's modules create have no `tags` argument at all — for example
-`aws_s3_bucket_public_access_block`, `aws_s3_bucket_versioning`, `aws_s3_bucket_policy` and
+`aws_s3_bucket_public_access_block`, `aws_s3_bucket_versioning`, `aws_s3_bucket_policy`,
+`aws_s3_bucket_ownership_controls`, `aws_s3_bucket_server_side_encryption_configuration`, `aws_iam_role_policy` and
 `aws_iam_openid_connect_provider`'s underlying trust configuration. These inherit nothing from
 `default_tags` (AWS doesn't support tagging them), which is expected and not a policy violation:
 they are attributes/sub-configuration of an already-tagged parent resource (the bucket, the role),

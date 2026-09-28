@@ -1,6 +1,8 @@
 mock_provider "aws" {}
 
 variables {
+  # Forced by the Repository tag regex (docs/tagging-policy.md), not "any owner". These runs can't
+  # tell a threaded var.github_owner from a hardcoded default; github_oidc_role.tftest.hcl covers that.
   github_owner = "goncalofileno"
   alert_email  = "alerts@example.com"
 }
