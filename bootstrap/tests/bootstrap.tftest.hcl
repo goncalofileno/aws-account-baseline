@@ -14,3 +14,13 @@ run "state_bucket_is_named_after_the_account" {
     error_message = "State bucket must be named gf-tfstate-<account-id>."
   }
 }
+
+run "rejects_region_outside_scp_allow_list" {
+  command = plan
+
+  variables {
+    region = "ap-southeast-1"
+  }
+
+  expect_failures = [var.region]
+}

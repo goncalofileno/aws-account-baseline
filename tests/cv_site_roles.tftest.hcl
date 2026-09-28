@@ -236,17 +236,17 @@ run "cv_site_boundary_allows_only_runtime_needs" {
   assert {
     condition = (
       one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "LambdaLogs"]).Resource == [
-        "arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/cv-site-*",
-        "arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/cv-site-*:*",
+        "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cv-site-*",
+        "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cv-site-*:*",
       ] &&
-      one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "ReadOwnParameters"]).Resource == "arn:aws:ssm:eu-west-1:123456789012:parameter/cv-site/*" &&
-      one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "SendEmail"]).Resource == "arn:aws:ses:eu-west-1:123456789012:identity/*"
+      one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "ReadOwnParameters"]).Resource == "arn:aws:ssm:eu-north-1:123456789012:parameter/cv-site/*" &&
+      one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "SendEmail"]).Resource == "arn:aws:ses:eu-north-1:123456789012:identity/*"
     )
     error_message = "Boundary statements must be scoped to the exact expected resources."
   }
 
   assert {
-    condition     = one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "DecryptParametersViaSsm"]).Condition.StringEquals["kms:ViaService"] == "ssm.eu-west-1.amazonaws.com"
+    condition     = one([for s in jsondecode(aws_iam_policy.cv_site_boundary.policy).Statement : s if s.Sid == "DecryptParametersViaSsm"]).Condition.StringEquals["kms:ViaService"] == "ssm.eu-north-1.amazonaws.com"
     error_message = "kms:Decrypt in the boundary must be scoped to KMS calls made via SSM."
   }
 }
@@ -360,42 +360,42 @@ run "cv_site_deploy_policy_matches_exactly" {
           "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion",
           "lambda:PutFunctionConcurrency", "lambda:TagResource", "lambda:UntagResource",
         ]
-        Resource  = ["arn:aws:lambda:eu-west-1:123456789012:function:cv-site-*"]
+        Resource  = ["arn:aws:lambda:eu-north-1:123456789012:function:cv-site-*"]
         Condition = null
       }
       SiteFunctionPermissions = {
         Effect    = "Allow", Action = ["lambda:AddPermission", "lambda:RemovePermission"]
-        Resource  = ["arn:aws:lambda:eu-west-1:123456789012:function:cv-site-*"]
+        Resource  = ["arn:aws:lambda:eu-north-1:123456789012:function:cv-site-*"]
         Condition = { StringEquals = { "lambda:Principal" = "apigateway.amazonaws.com" } }
       }
       HttpApis = {
         Effect    = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
-        Resource  = ["arn:aws:apigateway:eu-west-1::/apis", "arn:aws:apigateway:eu-west-1::/apis/*", "arn:aws:apigateway:eu-west-1::/tags/*"]
+        Resource  = ["arn:aws:apigateway:eu-north-1::/apis", "arn:aws:apigateway:eu-north-1::/apis/*", "arn:aws:apigateway:eu-north-1::/tags/*"]
         Condition = null
       }
       SiteLogGroups = {
         Effect    = "Allow"
         Action    = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:DeleteRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource", "logs:TagLogGroup", "logs:ListTagsLogGroup"]
-        Resource  = ["arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/cv-site-*", "arn:aws:logs:eu-west-1:123456789012:log-group:/aws/lambda/cv-site-*:*"]
+        Resource  = ["arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cv-site-*", "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cv-site-*:*"]
         Condition = null
       }
       DescribeLogGroups = { Effect = "Allow", Action = ["logs:DescribeLogGroups"], Resource = ["*"], Condition = null }
       SiteParameters = {
         Effect    = "Allow"
         Action    = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:DeleteParameter", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:ListTagsForResource", "ssm:LabelParameterVersion"]
-        Resource  = ["arn:aws:ssm:eu-west-1:123456789012:parameter/cv-site/*"]
+        Resource  = ["arn:aws:ssm:eu-north-1:123456789012:parameter/cv-site/*"]
         Condition = null
       }
       DescribeParameters = { Effect = "Allow", Action = ["ssm:DescribeParameters"], Resource = ["*"], Condition = null }
       SsmKmsViaService = {
         Effect    = "Allow", Action = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
         Resource  = ["*"]
-        Condition = { StringEquals = { "kms:ViaService" = "ssm.eu-west-1.amazonaws.com" } }
+        Condition = { StringEquals = { "kms:ViaService" = "ssm.eu-north-1.amazonaws.com" } }
       }
       SesIdentityManagement = {
         Effect    = "Allow"
         Action    = ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:PutEmailIdentityDkimAttributes", "ses:TagResource", "ses:UntagResource", "ses:ListTagsForResource"]
-        Resource  = ["arn:aws:ses:eu-west-1:123456789012:identity/*"]
+        Resource  = ["arn:aws:ses:eu-north-1:123456789012:identity/*"]
         Condition = null
       }
       SesListIdentities = { Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = ["*"], Condition = null }
@@ -478,12 +478,12 @@ run "cv_site_preview_policy_matches_exactly" {
       AcmRead        = { Effect = "Allow", Action = ["acm:DescribeCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate"], Resource = ["*"], Condition = null }
       LambdaRead = {
         Effect    = "Allow", Action = ["lambda:Get*", "lambda:List*"]
-        Resource  = ["arn:aws:lambda:eu-west-1:123456789012:function:cv-site-*"]
+        Resource  = ["arn:aws:lambda:eu-north-1:123456789012:function:cv-site-*"]
         Condition = null
       }
       ApiRead = {
         Effect    = "Allow", Action = ["apigateway:GET"]
-        Resource  = ["arn:aws:apigateway:eu-west-1::/apis", "arn:aws:apigateway:eu-west-1::/apis/*", "arn:aws:apigateway:eu-west-1::/tags/*"]
+        Resource  = ["arn:aws:apigateway:eu-north-1::/apis", "arn:aws:apigateway:eu-north-1::/apis/*", "arn:aws:apigateway:eu-north-1::/tags/*"]
         Condition = null
       }
       LogsRead        = { Effect = "Allow", Action = ["logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = ["*"], Condition = null }

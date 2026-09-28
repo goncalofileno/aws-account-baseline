@@ -11,7 +11,7 @@ terraform {
   # Bucket is supplied at init time: -backend-config="bucket=gf-tfstate-<account-id>"
   backend "s3" {
     key          = "aws-account-baseline/terraform.tfstate"
-    region       = "eu-west-1"
+    region       = "eu-north-1"
     encrypt      = true
     use_lockfile = true
   }

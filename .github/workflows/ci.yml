@@ -87,7 +87,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_PLAN }}
-          aws-region: eu-west-1
+          aws-region: eu-north-1
           mask-aws-account-id: true
       - name: init
         run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"

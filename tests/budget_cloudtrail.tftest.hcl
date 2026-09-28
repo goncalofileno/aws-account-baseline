@@ -71,7 +71,7 @@ run "cloudtrail_is_multi_region_with_validation" {
         Principal = { Service = "cloudtrail.amazonaws.com" }
         Action    = "s3:GetBucketAcl"
         Resource  = "arn:aws:s3:::gf-cloudtrail-123456789012"
-        Condition = { StringEquals = { "aws:SourceArn" = "arn:aws:cloudtrail:eu-west-1:123456789012:trail/baseline-management-events" } }
+        Condition = { StringEquals = { "aws:SourceArn" = "arn:aws:cloudtrail:eu-north-1:123456789012:trail/baseline-management-events" } }
       },
       {
         Sid       = "CloudTrailWrite"
@@ -79,7 +79,7 @@ run "cloudtrail_is_multi_region_with_validation" {
         Principal = { Service = "cloudtrail.amazonaws.com" }
         Action    = "s3:PutObject"
         Resource  = "arn:aws:s3:::gf-cloudtrail-123456789012/AWSLogs/123456789012/*"
-        Condition = { StringEquals = { "aws:SourceArn" = "arn:aws:cloudtrail:eu-west-1:123456789012:trail/baseline-management-events" } }
+        Condition = { StringEquals = { "aws:SourceArn" = "arn:aws:cloudtrail:eu-north-1:123456789012:trail/baseline-management-events" } }
       },
     ]
     error_message = "The trail bucket must grant exactly these two CloudTrail-only statements (principal, action and resource), each scoped to this trail via aws:SourceArn."

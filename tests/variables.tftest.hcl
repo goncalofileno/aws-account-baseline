@@ -28,3 +28,13 @@ run "rejects_invalid_alert_email" {
 
   expect_failures = [var.alert_email]
 }
+
+run "rejects_region_outside_scp_allow_list" {
+  command = plan
+
+  variables {
+    region = "ap-southeast-1"
+  }
+
+  expect_failures = [var.region]
+}

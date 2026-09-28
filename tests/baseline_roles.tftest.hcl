@@ -144,7 +144,7 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
           "arn:aws:iam::123456789012:policy/cv-site-*",
         ]
       }
-      CloudTrailManage = { Effect = "Allow", Action = ["cloudtrail:*"], Resource = ["arn:aws:cloudtrail:eu-west-1:123456789012:trail/baseline-management-events"] }
+      CloudTrailManage = { Effect = "Allow", Action = ["cloudtrail:*"], Resource = ["arn:aws:cloudtrail:eu-north-1:123456789012:trail/baseline-management-events"] }
       CloudTrailRead   = { Effect = "Allow", Action = ["cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*"], Resource = ["*"] }
       Budgets          = { Effect = "Allow", Action = ["budgets:ModifyBudget", "budgets:ViewBudget", "budgets:TagResource", "budgets:UntagResource", "budgets:ListTagsForResource"], Resource = ["arn:aws:budgets::123456789012:budget/*"] }
       TrailBucket      = { Effect = "Allow", Action = ["s3:*"], Resource = ["arn:aws:s3:::gf-cloudtrail-123456789012"] }
