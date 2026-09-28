@@ -23,8 +23,11 @@ product teams deploy on top with Pulumi/CDK.
 
 ### Non-goals
 
-- AWS Organizations, multi-account landing zone, SCPs, Control Tower.
-- IAM Identity Center configuration (done manually once; see §8).
+- AWS Organizations, multi-account landing zone, SCPs, Control Tower (the account already has these,
+  created and managed by AWS as part of the "advanced AWS features" activation; this repo neither
+  creates nor manages them).
+- IAM user / IAM Identity Center setup (there is none; day-to-day human access is the browser-based
+  `aws login` session described in §8).
 - Anything specific to the site's runtime resources (those belong to `cv-site`/Pulumi).
 
 ## 2. Key decisions
@@ -35,7 +38,7 @@ product teams deploy on top with Pulumi/CDK.
 | Minimum version | Terraform ≥ 1.10 / OpenTofu ≥ 1.10 | Needed for S3 native state locking |
 | State | S3 backend, `use_lockfile = true`, no DynamoDB | Native locking, one fewer resource |
 | State bucket bootstrap | Separate `bootstrap/` root, applied once with local state | Solves the chicken-and-egg problem |
-| Region | `eu-west-1` (Ireland) | Close to Portugal, full service coverage |
+| Region | `eu-north-1` (Stockholm) | Fixed by the account's AWS-managed SCP, which restricts the project's home region to `eu-north-1`/`us-east-1`/`us-west-2`; CloudFront serves users from edge locations regardless of origin region, so this has no latency impact |
 | Apply in CI | Only on `main`, behind a GitHub Environment with required reviewer | IAM changes must be human-approved |
 
 ## 3. Repository structure
@@ -99,7 +102,7 @@ full subject, never a bare wildcard on the repo).
   scoping; this is documented in a policy comment.)
 - ACM (`us-east-1`): request/describe/delete certificates.
 - Lambda: manage `function:cv-site-*`.
-- API Gateway v2: manage APIs in `eu-west-1` (limited resource-level support; documented).
+- API Gateway v2: manage APIs in `eu-north-1` (limited resource-level support; documented).
 - CloudWatch Logs: manage `log-group:/aws/lambda/cv-site-*`.
 - SSM: manage `parameter/cv-site/*`.
 - SES: manage identities and send-related configuration.
@@ -141,7 +144,7 @@ read/write on the state lockfile object (plan needs the lock).
 
 ## 5. Variables and outputs
 
-**Variables:** `github_owner`, `alert_email`, `region` (default `eu-west-1`),
+**Variables:** `github_owner`, `alert_email`, `region` (default `eu-north-1`),
 `cv_site_repo` (default `cv-site`), `baseline_repo` (default `aws-account-baseline`).
 
 **Outputs:** `cv_site_deploy_role_arn`, `cv_site_preview_role_arn`, `baseline_plan_role_arn`,
@@ -177,19 +180,35 @@ the same run.
 
 ## 8. Manual steps (documented in the README)
 
-1. Root user: enable MFA; confirm no root access keys exist.
-2. Enable IAM Identity Center; create Gonçalo's user with the `AdministratorAccess` permission set;
-   locally run `aws configure sso` (profile `personal`).
-3. `cd bootstrap && terraform init && terraform apply` (local state).
-4. Root module: `terraform init` (S3 backend) and first `terraform apply` locally. CI roles do
+**Account context:** the account was created through AWS's newer "Sign up for AWS" flow and later
+upgraded to the Paid plan with "advanced AWS features" activated. That makes it an AWS Organization
+(a management account used only for org/billing admin, this project account, and an AWS-created
+Identity Delegated Admin account), with AWS-managed SCPs already in place — including one that
+restricts this account to `eu-north-1`/`us-east-1`/`us-west-2` (+ global/unspecified), which is why
+`var.region` is constrained to that list (§5). There are no IAM users and no IAM Identity Center
+setup by the owner.
+
+1. Root user (management account): enable MFA; confirm no root access keys exist. It is used only
+   for organization/billing admin, never for day-to-day work.
+2. Day-to-day human access to the project account is `aws login --profile personal`, which opens a
+   browser, authenticates with an AWS Builder ID, and lets you pick the project account's session
+   (credentials refresh automatically for up to 12 h). If the Terraform AWS provider doesn't pick
+   up those credentials automatically, export them first:
+   `eval "$(aws configure export-credentials --profile personal --format env)"`.
+3. Pre-flight: `aws cloudtrail describe-trails --include-shadow-trails` — if an organization or
+   AWS-managed trail already records management events for this account, the trail this repo
+   creates (§4.7) would be a second, paid copy; decide whether to import it into state or skip
+   creating it before the first apply.
+4. `cd bootstrap && terraform init && terraform apply` (local state).
+5. Root module: `terraform init` (S3 backend) and first `terraform apply` locally. CI roles do
    not exist before this.
-5. In GitHub: create Environment `production` with a required reviewer; set repo **secrets**
+6. In GitHub: create Environment `production` with a required reviewer; set repo **secrets**
    `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`, `TF_STATE_BUCKET` and `ALERT_EMAIL` (both repos are public,
    so ARNs and the alert address must not be `vars`, which print unmasked in logs). Set
    `AWS_ROLE_PLAN`, `TF_STATE_BUCKET` and `ALERT_EMAIL` again scoped to Dependabot
    (`gh secret set NAME --app dependabot ...`), since Dependabot PRs only receive Dependabot's
    own secrets and `plan` is a required check.
-6. Copy the `cv_site_*_role_arn` outputs into the `cv-site` repo, also as secrets.
+7. Copy the `cv_site_*_role_arn` outputs into the `cv-site` repo, also as secrets.
 
 (Budget email subscribers need no confirmation.)
 
@@ -203,8 +222,8 @@ S3 for state and trail logs costs cents.
 - Plans that would destroy IAM roles or the OIDC provider are visible in the PR comment and need
   the required reviewer to apply.
 - The state bucket is versioned, so a corrupted state can be restored from a previous version.
-- Recovering from lockout (for example a broken trust policy) is done locally with the SSO admin
-  profile. This is documented in the README.
+- Recovering from lockout (for example a broken trust policy) is done locally with `aws login
+  --profile personal` (browser-based session, project account). This is documented in the README.
 
 ## Implementation notes (post-review)
 
@@ -245,3 +264,11 @@ The shipped code is stricter than this spec in a few places, tightened during co
   are asserted by `tests/*.tftest.hcl` with allow-list/exact-match assertions (not just "contains"
   checks), and were exercised with mutation testing during review — a broadened statement or a
   dropped condition makes the corresponding test fail.
+- **Adapted to the account actually applied to**, once its real shape was confirmed: the region
+  choice moved to `eu-north-1` (the SCP-fixed home region for this project account, replacing the
+  original Ireland-region choice), `var.region` gained a validation restricting it to the SCP's
+  allowed regions (`eu-north-1`/`us-east-1`/`us-west-2`), and every reference to IAM Identity
+  Center / `aws configure sso` was replaced with the account's actual access model (browser-based
+  `aws login` sessions; no IAM users). See §8 and the README for the current steps, and the
+  README's "First-time setup" for the CloudTrail pre-flight check needed before the trail in §4.7
+  is applied (an org-level trail may already cover this account).

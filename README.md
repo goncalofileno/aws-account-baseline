@@ -129,23 +129,42 @@ Notes on the toolchain:
 
 ## First-time setup
 
-1. Root user: enable MFA and make sure no root access keys exist.
-2. Enable IAM Identity Center (organization instance), create your user with `AdministratorAccess`, then run
-   `aws configure sso --profile personal` and `export AWS_PROFILE=personal`.
-3. Create the state bucket:
+**Account context:** this account was created through AWS's newer "Sign up for AWS" flow and later
+upgraded to the Paid plan with "advanced AWS features" activated. That makes it an AWS Organization
+(a management account used only for org/billing admin, this project account, and an AWS-created
+Identity Delegated Admin account), and AWS-managed SCPs are already in place — including a region
+floor that only allows `eu-north-1` (this project's home region), `us-east-1` and `us-west-2` (plus
+global/unspecified requests). `var.region` is validated against that list. There are no IAM users
+and no IAM Identity Center setup by the owner.
+
+1. Root user (management account): enable MFA and make sure no root access keys exist. It is used
+   only for organization/billing admin, never for day-to-day work.
+2. Day-to-day access to the project account is `aws login --profile personal`: it opens a browser,
+   authenticates with an AWS Builder ID, and lets you pick the project account's session
+   (credentials refresh automatically for up to 12 h). If the Terraform AWS provider doesn't pick
+   up those credentials automatically, export them first:
+   ```bash
+   eval "$(aws configure export-credentials --profile personal --format env)"
+   ```
+3. Pre-flight check for CloudTrail (§4.7 creates a trail): run
+   `aws cloudtrail describe-trails --include-shadow-trails`. If an organization or AWS-managed
+   trail already records management events for this account, the trail this repo creates would be
+   a second, paid copy — decide whether to import the existing trail into state or skip creating a
+   new one before applying.
+4. Create the state bucket:
    ```bash
    terraform -chdir=bootstrap init
    terraform -chdir=bootstrap apply
    ```
    Keep `bootstrap/terraform.tfstate` safe (it is git-ignored). If it is lost, re-import the bucket.
-4. First apply of the root module:
+5. First apply of the root module:
    ```bash
    export TF_VAR_github_owner=$(gh api user -q .login)
    export TF_VAR_alert_email='you@example.com'
    terraform init -backend-config="bucket=$(terraform -chdir=bootstrap output -raw state_bucket)"
    terraform plan -out=tfplan && terraform apply tfplan
    ```
-5. GitHub: this repo is public, so `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`, `TF_STATE_BUCKET` and
+6. GitHub: this repo is public, so `AWS_ROLE_PLAN`, `AWS_ROLE_APPLY`, `TF_STATE_BUCKET` and
    `ALERT_EMAIL` must all be **secrets**, not variables — GitHub prints `vars` unmasked in `with:`
    inputs and substituted `run:` scripts, and every one of these values is either an ARN
    (which embeds the account ID) or the alert address. Set them with:
@@ -167,7 +186,7 @@ Notes on the toolchain:
    gh secret set TF_STATE_BUCKET --app dependabot --body "$(terraform -chdir=bootstrap output -raw state_bucket)"
    gh secret set ALERT_EMAIL --app dependabot   # prompts for the address
    ```
-6. Copy `cv_site_deploy_role_arn` and `cv_site_preview_role_arn` into the `cv-site` repo, also as
+7. Copy `cv_site_deploy_role_arn` and `cv_site_preview_role_arn` into the `cv-site` repo, also as
    **secrets** (same reasoning: both are ARNs embedding the account ID, and `cv-site` is public
    too): `AWS_ROLE_DEPLOY` and `AWS_ROLE_PREVIEW`.
 
@@ -178,9 +197,9 @@ Open a PR, and CI posts a plan summary. Merge it, approve the `production` deplo
 ## Recovery
 
 - **Locked out of CI** (for example after a broken trust policy): run
-  `aws sso login --profile personal` then `terraform apply` locally with the SSO admin profile.
+  `aws login --profile personal` (browser, project account session) then `terraform apply` locally.
 - **Corrupted state**: the state bucket is versioned, so restore the previous version of
   `aws-account-baseline/terraform.tfstate`.
 - **Stale lock after a cancelled run**: `use_lockfile` leaves a `.tflock` object behind if a plan
   or apply is killed mid-run. Run `terraform force-unlock <LOCK_ID>` (the ID is printed in the
-  error) locally with the SSO admin profile.
+  error) locally, after `aws login --profile personal`.

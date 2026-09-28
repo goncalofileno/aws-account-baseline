@@ -12,8 +12,8 @@ his CV site (`../cv-site`, see its `CLAUDE.md`). The design is in `docs/specs/`.
 ## Working agreements
 
 - Talk to Gonçalo in European Portuguese (pt-PT). Everything committed is in English.
-- Never ask for credentials in chat. He runs `aws sso login --profile personal` and `gh auth login`
-  and types secret values into prompts himself.
+- Never ask for credentials in chat. He runs `aws login --profile personal` (browser-based,
+  project-account session) and `gh auth login`, and types secret values into prompts himself.
 - Public repo: no email or AWS account ID in committed files or CI logs (CI prints summaries only).
 - Keep cost at about USD 0/month.
 - Every change: `make check` (fmt, validate, tflint, checkov, tests) and `make test TF=tofu` must
@@ -27,4 +27,5 @@ his CV site (`../cv-site`, see its `CLAUDE.md`). The design is in `docs/specs/`.
 ## Change flow
 
 A PR gets CI checks and a plan summary comment. After the merge, the `production` environment needs
-approval, then the apply runs. Local recovery uses the SSO admin profile (see README → Recovery).
+approval, then the apply runs. Local recovery uses `aws login --profile personal` (see README →
+Recovery).
