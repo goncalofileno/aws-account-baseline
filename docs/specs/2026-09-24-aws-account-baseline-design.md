@@ -272,3 +272,8 @@ The shipped code is stricter than this spec in a few places, tightened during co
   `aws login` sessions; no IAM users). See §8 and the README for the current steps, and the
   README's "First-time setup" for the CloudTrail pre-flight check needed before the trail in §4.7
   is applied (an org-level trail may already cover this account).
+- **Tagging policy added after the initial review** (owner-approved, same standard as `cv-site`):
+  a pure `modules/tags` module validates `Component`/`Environment`/`ManagedBy`/`Repository` and
+  fixes `Project`/`Owner`, and both roots feed its output into the AWS provider's `default_tags`,
+  so every resource is created already tagged. Full policy, rationale and enforcement in both
+  repos: `docs/tagging-policy.md`.

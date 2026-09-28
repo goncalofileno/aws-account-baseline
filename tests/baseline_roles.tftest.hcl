@@ -7,7 +7,7 @@ mock_provider "aws" {
 }
 
 variables {
-  github_owner = "test-owner"
+  github_owner = "goncalofileno"
   alert_email  = "alerts@example.com"
 }
 
@@ -15,12 +15,12 @@ run "baseline_roles_trust_only_the_expected_subjects" {
   command = apply
 
   assert {
-    condition     = jsondecode(module.baseline_plan.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/aws-account-baseline:pull_request"]
+    condition     = jsondecode(module.baseline_plan.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno/aws-account-baseline:pull_request"]
     error_message = "baseline-plan must only trust pull requests of this repo."
   }
 
   assert {
-    condition     = jsondecode(module.baseline_apply.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/aws-account-baseline:environment:production"]
+    condition     = jsondecode(module.baseline_apply.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno/aws-account-baseline:environment:production"]
     error_message = "baseline-apply must only trust the protected production environment."
   }
 

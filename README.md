@@ -1,6 +1,6 @@
 # aws-account-baseline
 
-Terraform that prepares my personal AWS account for [`cv-site`](https://github.com/<owner>/cv-site):
+Terraform that prepares my personal AWS account for [`cv-site`](https://github.com/goncalofileno/cv-site):
 keyless GitHub Actions access through OIDC, least-privilege deploy roles, a cost budget and an audit trail.
 
 The code is CI-tested with **Terraform and OpenTofu**. Every change is linted, security-scanned, unit-tested
@@ -17,6 +17,7 @@ with mock providers and planned on the PR, then applied only after manual approv
 | `baseline-plan` / `baseline-apply` roles | This repo's own CI (plan on PRs; apply only from the protected `production` environment) |
 | `monthly-cost` budget | Email alerts at USD 2 forecast / USD 5 actual |
 | CloudTrail `baseline-management-events` | Multi-region audit trail with log file validation; log objects expire after 90 days (noncurrent versions deleted 30 days after that) |
+| Tagging | Every resource here and in `bootstrap/` is tagged (`Project`, `Component`, `Environment`, `ManagedBy`, `Repository`, `Owner`) via `modules/tags` + the provider's `default_tags` — see [`docs/tagging-policy.md`](docs/tagging-policy.md) |
 
 ```mermaid
 flowchart LR
@@ -103,8 +104,10 @@ About USD 0/month. IAM, OIDC, the first two budgets and one management-events tr
 bootstrap/            state bucket (local state, applied once)
 modules/secure-bucket private, versioned, TLS-only, SSE-S3 bucket
 modules/github-oidc-role  IAM role assumable from one GitHub repo + claims
+modules/tags          standard tag map (Project/Component/Environment/ManagedBy/Repository/Owner)
 *.tf                  root module (S3 backend with native locking)
 tests/                terraform test with mock providers
+docs/tagging-policy.md  tag keys, allowed values and how each repo enforces them
 ```
 
 ## Local development

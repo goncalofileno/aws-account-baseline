@@ -23,6 +23,7 @@ his CV site (`../cv-site`, see its `CLAUDE.md`). The design is in `docs/specs/`.
 - Any IAM change (roles, policies, boundary, deny statements) must keep the allow-list/exact-match
   assertions in `tests/*.tftest.hcl` passing, and should be mutation-checked: temporarily broaden a
   statement or drop a condition and confirm the relevant test fails before reverting.
+- Every resource carries the required tags from `docs/tagging-policy.md`.
 
 ## Change flow
 

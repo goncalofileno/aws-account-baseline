@@ -7,7 +7,7 @@ mock_provider "aws" {
 }
 
 variables {
-  github_owner = "test-owner"
+  github_owner = "goncalofileno"
   alert_email  = "alerts@example.com"
 }
 
@@ -15,12 +15,12 @@ run "cv_site_roles_trust_only_the_expected_subjects" {
   command = apply
 
   assert {
-    condition     = jsondecode(module.cv_site_deploy.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/cv-site:ref:refs/heads/main"]
+    condition     = jsondecode(module.cv_site_deploy.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno/cv-site:ref:refs/heads/main"]
     error_message = "cv-site-deploy must only trust the cv-site main branch."
   }
 
   assert {
-    condition     = jsondecode(module.cv_site_preview.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/cv-site:pull_request"]
+    condition     = jsondecode(module.cv_site_preview.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno/cv-site:pull_request"]
     error_message = "cv-site-preview must only trust cv-site pull requests."
   }
 

@@ -1,7 +1,7 @@
 mock_provider "aws" {}
 
 variables {
-  github_owner = "test-owner"
+  github_owner = "goncalofileno"
   alert_email  = "alerts@example.com"
 }
 
@@ -37,4 +37,20 @@ run "rejects_region_outside_scp_allow_list" {
   }
 
   expect_failures = [var.region]
+}
+
+run "root_tags_are_exact" {
+  command = plan
+
+  assert {
+    condition = module.tags.tags == {
+      Project     = "cv-site"
+      Component   = "account-baseline"
+      Environment = "shared"
+      ManagedBy   = "terraform"
+      Repository  = "github.com/goncalofileno/aws-account-baseline"
+      Owner       = "goncalo-fileno"
+    }
+    error_message = "Root module must tag every resource with exactly this map via default_tags."
+  }
 }

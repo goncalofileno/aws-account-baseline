@@ -7,7 +7,7 @@ mock_provider "aws" {
 }
 
 variables {
-  github_owner = "test-owner"
+  github_owner = "goncalofileno"
   alert_email  = "alerts@example.com"
 }
 

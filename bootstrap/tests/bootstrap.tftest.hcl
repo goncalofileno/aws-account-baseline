@@ -24,3 +24,19 @@ run "rejects_region_outside_scp_allow_list" {
 
   expect_failures = [var.region]
 }
+
+run "bootstrap_tags_are_exact" {
+  command = plan
+
+  assert {
+    condition = module.tags.tags == {
+      Project     = "cv-site"
+      Component   = "tf-state"
+      Environment = "shared"
+      ManagedBy   = "terraform"
+      Repository  = "github.com/goncalofileno/aws-account-baseline"
+      Owner       = "goncalo-fileno"
+    }
+    error_message = "Bootstrap must tag its state bucket with exactly this map via default_tags."
+  }
+}

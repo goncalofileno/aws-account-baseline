@@ -1,6 +1,7 @@
 variable "github_owner" {
   description = "GitHub user that owns the repositories. Case-sensitive: it must match the OIDC sub claim."
   type        = string
+  default     = "goncalofileno"
 
   validation {
     condition     = can(regex("^[A-Za-z0-9-]+$", var.github_owner))

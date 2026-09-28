@@ -1,12 +1,16 @@
+module "tags" {
+  source = "../modules/tags"
+
+  component   = "tf-state"
+  environment = "shared"
+  repository  = "github.com/goncalofileno/aws-account-baseline"
+}
+
 provider "aws" {
   region = var.region
 
   default_tags {
-    tags = {
-      Project   = "aws-account-baseline"
-      ManagedBy = "terraform"
-      Component = "bootstrap"
-    }
+    tags = module.tags.tags
   }
 }
 
