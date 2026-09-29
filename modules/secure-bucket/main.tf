@@ -1,13 +1,10 @@
 
-# Accepted trade-offs for this module (not checkov findings, so no #checkov:skip is attached):
-# - No access logging: would need a second bucket per bucket using this module, for buckets that
-#   hold either CI-generated state or CloudTrail's own logs.
-# - No cross-region replication: adds ongoing storage cost for personal-account data that doesn't
-#   need it.
-# - SSE-S3 (AES256) instead of a customer-managed KMS key: a CMK is about USD 1/month; SSE-S3 is
-#   free and already encrypts at rest.
-# - No event notifications: nothing in this account consumes them.
+# Accepted trade-offs for this module, each recorded as a checkov skip on the bucket below.
 resource "aws_s3_bucket" "this" {
+  #checkov:skip=CKV_AWS_18:No access logging; it would need a second bucket per bucket, for buckets that only hold Terraform state or CloudTrail logs
+  #checkov:skip=CKV_AWS_144:No cross-region replication; ongoing storage cost for personal-account data that doesn't need it (and the account's SCP limits regions)
+  #checkov:skip=CKV_AWS_145:SSE-S3 (AES256) instead of a customer-managed KMS key; a CMK costs about USD 1/month and SSE-S3 already encrypts at rest
+  #checkov:skip=CKV2_AWS_62:No event notifications; nothing in this account consumes them
   bucket = var.name
 }
 

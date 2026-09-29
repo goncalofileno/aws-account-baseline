@@ -34,10 +34,12 @@ jobs:
         run: |
           tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
           tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+      # Pinned checkov (same version as local `make security`, see .checkov-version): new checkov
+      # releases add checks, so an unpinned scanner makes CI and local results drift.
       - name: checkov
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          config_file: .checkov.yaml
+        run: |
+          pipx install "checkov==$(cat .checkov-version)"
+          checkov --config-file .checkov.yaml
 
   test:
     name: test (${{ matrix.tool }})

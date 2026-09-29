@@ -252,10 +252,7 @@ The shipped code is stricter than this spec in a few places, tightened during co
   lets the role rewrite the bucket policy or lifecycle rules, and combined with `iam:*` on its own role, `baseline-apply` is
   effectively account-admin-equivalent; the real control is the `production` environment's
   required reviewer (see the README's accepted residual risks).
-- **checkov skips are narrower than a first pass suggested**: two skips were removed during review
-  (`5967f51`, `30c260c`) because the checks either didn't fire in checkov 3.x or the skip
-  description was misleading; only skips for checks that actually trigger remain, each with an
-  inline justification.
+- **checkov is pinned (`.checkov-version`, 3.3.20) in CI and locally.** An early local checkov (3.3.10) didn't have several checks, so their skips were removed as "inert". The first PR run in CI, with the action's newer checkov, flagged them (S3 access logging, cross-region replication, KMS, event notifications, CloudTrail→CloudWatch, full IAM on `baseline-apply`). They are accepted design trade-offs, so each is now an inline skip with its reason, and the scanner version is pinned so local and CI results can't drift.
 - **Lock-file handling is more involved than "just run terraform test"**: the committed
   `.terraform.lock.hcl` files are Terraform's; OpenTofu resolves a different registry address, so
   the Makefile backs up and restores each directory's lock file around any `TF=tofu` run and uses

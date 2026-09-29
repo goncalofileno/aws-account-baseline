@@ -31,6 +31,7 @@ module "cloudtrail_bucket" {
 resource "aws_cloudtrail" "main" {
   #checkov:skip=CKV_AWS_35:Logs are encrypted with SSE-S3; a customer-managed KMS key would add USD 1/month
   #checkov:skip=CKV_AWS_252:No SNS topic; nobody consumes per-file delivery notifications
+  #checkov:skip=CKV2_AWS_10:No CloudWatch Logs delivery; it costs money and nothing consumes it (event history and the S3 log files cover investigations)
   name                          = local.trail_name
   s3_bucket_name                = module.cloudtrail_bucket.name
   is_multi_region_trail         = true
