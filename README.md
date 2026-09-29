@@ -120,6 +120,7 @@ docs/tagging-policy.md  tag keys, allowed values and how each repo enforces them
 
 ```bash
 make check            # fmt, validate, tflint, checkov, tests (Terraform)
+                      # checkov is pinned in .checkov-version: pipx install "checkov==$(cat .checkov-version)"
 make test TF=tofu     # tests with OpenTofu
 ```
 

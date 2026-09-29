@@ -28,6 +28,7 @@ resource "aws_iam_role" "this" {
 
 resource "aws_iam_role_policy" "this" {
   #checkov:skip=CKV_AWS_355:Policies are passed in by callers, documented in roles-*.tf and asserted by tests/*.tftest.hcl (boundary, deny statements, read-only checks)
+  #checkov:skip=CKV2_AWS_40:Fires for baseline-apply only; iam:* is intentional (it manages the cv-site-* and baseline-* roles and policies), is scoped to those ARNs, pinned by exact statement tests and gated by the production environment reviewer
   name   = "${var.name}-policy"
   role   = aws_iam_role.this.id
   policy = var.policy_json

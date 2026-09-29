@@ -50,6 +50,8 @@ lint:
 	tflint --recursive --config "$(CURDIR)/.tflint.hcl"
 
 security:
+	@want=$$(cat .checkov-version); have=$$(checkov --version); \
+	  [ "$$want" = "$$have" ] || { echo "checkov $$have installed, $$want expected (pipx install checkov==$$want)"; exit 1; }
 	checkov --config-file .checkov.yaml
 
 test:
