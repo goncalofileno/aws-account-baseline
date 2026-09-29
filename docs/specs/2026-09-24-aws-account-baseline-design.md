@@ -79,20 +79,20 @@ aws-account-baseline/
 
 ### 4.3 Module `github-oidc-role`
 
-Inputs: `name`, `github_owner`, `github_repo`, `subject_claims` (list, e.g. `ref:refs/heads/main`,
+Inputs: `name`, `github_owner`, `github_owner_id`, `github_repo`, `github_repo_id`, `subject_claims` (list, e.g. `ref:refs/heads/main`,
 `pull_request`, `environment:production`), `policy_json`, optional `permissions_boundary_arn`,
 `max_session_duration` (default 3600).
 
 Trust policy conditions: `aud = sts.amazonaws.com` and `sub` matches
-`repo:<owner>/<repo>:<claim>` for each allowed claim (exact `StringEquals`/`StringLike` on the
+`repo:<owner>@<owner_id>/<repo>@<repo_id>:<claim>` (GitHub immutable subject) for each allowed claim (exact `StringEquals`/`StringLike` on the
 full subject, never a bare wildcard on the repo).
 
 ### 4.4 Roles for `cv-site`
 
 | Role | Assumable from | Purpose |
 |---|---|---|
-| `cv-site-deploy` | `repo:<owner>/cv-site:ref:refs/heads/main` | `pulumi up`, `s3 sync`, CloudFront invalidation |
-| `cv-site-preview` | `repo:<owner>/cv-site:pull_request` | `pulumi preview` (read-only) |
+| `cv-site-deploy` | `repo:<owner>@<owner_id>/cv-site@<repo_id>:ref:refs/heads/main` | `pulumi up`, `s3 sync`, CloudFront invalidation |
+| `cv-site-preview` | `repo:<owner>@<owner_id>/cv-site@<repo_id>:pull_request` | `pulumi preview` (read-only) |
 
 **`cv-site-deploy` policy** (scoped to the `cv-site-` prefix wherever the service supports resource-level permissions):
 
@@ -122,8 +122,8 @@ the deploy role; no write actions.
 
 | Role | Assumable from | Purpose |
 |---|---|---|
-| `baseline-plan` | `repo:<owner>/aws-account-baseline:pull_request` | `terraform plan` (read-only + state read) |
-| `baseline-apply` | `repo:<owner>/aws-account-baseline:environment:production` | `terraform apply` |
+| `baseline-plan` | `repo:<owner>@<owner_id>/aws-account-baseline@<repo_id>:pull_request` | `terraform plan` (read-only + state read) |
+| `baseline-apply` | `repo:<owner>@<owner_id>/aws-account-baseline@<repo_id>:environment:production` | `terraform apply` |
 
 `baseline-apply` may manage IAM (OIDC provider, `cv-site-*`, `baseline-*` roles/policies),
 CloudTrail, Budgets, and the state and trail buckets. `baseline-plan` gets read-only on those plus
@@ -277,3 +277,12 @@ The shipped code is stricter than this spec in a few places, tightened during co
   fixes `Project`/`Owner`, and both roots feed its output into the AWS provider's `default_tags`,
   so every resource is created already tagged. Full policy, rationale and enforcement in both
   repos: `docs/tagging-policy.md`.
+- **Immutable OIDC subjects (production incident, after the first apply)**: the first CI apply
+  failed with `AccessDenied` on `AssumeRoleWithWebIdentity`. CloudTrail's `principalId` revealed that
+  GitHub now sends immutable subjects (`repo:goncalofileno@<owner_id>/aws-account-baseline@<repo_id>:environment:production`),
+  not the `repo:<owner>/<repo>:<claim>` form the trust policies expected; the repos'
+  `actions/oidc/customization/sub` setting confirmed `use_immutable_subject: true`. The module now takes
+  `github_owner_id` and `github_repo_id` and builds `repo:<owner>@<owner_id>/<repo>@<repo_id>:<claim>`,
+  the root has `github_owner_id`, `baseline_repo_id` and `cv_site_repo_id` variables (public GitHub
+  metadata), and the tests expect the new format. The updated trust policies were applied locally via
+  the README's documented recovery path. This makes a renamed or re-created repo unable to inherit access.

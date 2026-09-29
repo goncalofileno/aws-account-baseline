@@ -47,6 +47,12 @@ flowchart LR
 
 - **No long-lived credentials.** CI authenticates with OIDC. Every trust policy pins `aud` and the full
   `sub` (repo + branch/PR/environment), and a module validation rejects wildcards.
+- **Immutable OIDC subjects.** GitHub Actions now sends subjects that embed the numeric owner and
+  repository IDs: `repo:<owner>@<owner_id>/<repo>@<repo_id>:<claim>`. Trust policies match that exact
+  form, so renaming or deleting and re-creating a repo (or an owner rename that lets someone else
+  claim the old name) cannot inherit access to the roles. The IDs are public GitHub metadata, kept
+  in `github_owner_id`, `baseline_repo_id` and `cv_site_repo_id`. To get the prefix for a new repo:
+  `gh api repos/OWNER/REPO/actions/oidc/customization/sub -q .sub_claim_prefix`
 - **No privilege escalation.** `cv-site-deploy` is built from explicit action lists, not service
   wildcards, wherever resource-level scoping is possible: S3 access is limited to the account's own
   buckets (`aws:ResourceAccount`), SES is limited to identity management (no identity or
@@ -160,7 +166,10 @@ and no IAM Identity Center setup by the owner.
    terraform -chdir=bootstrap apply
    ```
    Keep `bootstrap/terraform.tfstate` safe (it is git-ignored). If it is lost, re-import the bucket.
-5. First apply of the root module:
+5. First apply of the root module. The trust policies need the numeric GitHub IDs. The defaults in
+   `variables.tf` are for `goncalofileno`'s two repos; for a fork or a new repo, read the prefix
+   with `gh api repos/OWNER/REPO/actions/oidc/customization/sub -q .sub_claim_prefix`
+   (`repo:<owner>@<owner_id>/<repo>@<repo_id>`) and set `github_owner_id` and the repo ID variable:
    ```bash
    export TF_VAR_github_owner=$(gh api user -q .login)
    export TF_VAR_alert_email='you@example.com'
@@ -199,7 +208,8 @@ Open a PR, and CI posts a plan summary. Merge it, approve the `production` deplo
 
 ## Recovery
 
-- **Locked out of CI** (for example after a broken trust policy): run
+- **Locked out of CI** (for example after a broken trust policy, or an `AccessDenied` on
+  `AssumeRoleWithWebIdentity`; CloudTrail's `principalId` shows the subject GitHub actually sent): run
   `aws login --profile personal` (browser, project account session) then `terraform apply` locally.
 - **Corrupted state**: the state bucket is versioned, so restore the previous version of
   `aws-account-baseline/terraform.tfstate`.

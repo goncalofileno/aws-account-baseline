@@ -9,6 +9,8 @@ mock_provider "aws" {
 variables {
   # Forced by the Repository tag regex (docs/tagging-policy.md), not "any owner". These runs can't
   # tell a threaded var.github_owner from a hardcoded default; github_oidc_role.tftest.hcl covers that.
+  # The GitHub owner/repo IDs are left at their real defaults (99756598, 1394684072, 1386380543), which
+  # the subject assertions expect; a wrong or swapped ID fails, a hardcoded copy of the same value would not.
   github_owner = "goncalofileno"
   alert_email  = "alerts@example.com"
 }
@@ -17,12 +19,12 @@ run "cv_site_roles_trust_only_the_expected_subjects" {
   command = apply
 
   assert {
-    condition     = jsondecode(module.cv_site_deploy.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno/cv-site:ref:refs/heads/main"]
+    condition     = jsondecode(module.cv_site_deploy.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno@99756598/cv-site@1386380543:ref:refs/heads/main"]
     error_message = "cv-site-deploy must only trust the cv-site main branch."
   }
 
   assert {
-    condition     = jsondecode(module.cv_site_preview.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno/cv-site:pull_request"]
+    condition     = jsondecode(module.cv_site_preview.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:goncalofileno@99756598/cv-site@1386380543:pull_request"]
     error_message = "cv-site-preview must only trust cv-site pull requests."
   }
 

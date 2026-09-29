@@ -10,7 +10,7 @@ locals {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = [for c in var.subject_claims : "repo:${var.github_owner}/${var.github_repo}:${c}"]
+            "token.actions.githubusercontent.com:sub" = [for c in var.subject_claims : "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}:${c}"]
           }
         }
       },

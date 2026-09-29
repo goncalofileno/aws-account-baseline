@@ -176,7 +176,9 @@ module "cv_site_deploy" {
   description       = "GitHub Actions deploy role for ${var.github_owner}/${var.cv_site_repo} (main branch only)."
   oidc_provider_arn = aws_iam_openid_connect_provider.github.arn
   github_owner      = var.github_owner
+  github_owner_id   = var.github_owner_id
   github_repo       = var.cv_site_repo
+  github_repo_id    = var.cv_site_repo_id
   subject_claims    = ["ref:refs/heads/main"]
   policy_json       = local.cv_site_deploy_policy
 }
@@ -188,7 +190,9 @@ module "cv_site_preview" {
   description       = "GitHub Actions read-only role for pulumi preview on ${var.github_owner}/${var.cv_site_repo} pull requests."
   oidc_provider_arn = aws_iam_openid_connect_provider.github.arn
   github_owner      = var.github_owner
+  github_owner_id   = var.github_owner_id
   github_repo       = var.cv_site_repo
+  github_repo_id    = var.cv_site_repo_id
   subject_claims    = ["pull_request"]
   policy_json       = local.cv_site_preview_policy
 }

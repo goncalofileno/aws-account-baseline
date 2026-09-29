@@ -63,7 +63,9 @@ module "baseline_plan" {
   description       = "GitHub Actions read-only role for terraform plan on ${var.github_owner}/${var.baseline_repo} pull requests."
   oidc_provider_arn = aws_iam_openid_connect_provider.github.arn
   github_owner      = var.github_owner
+  github_owner_id   = var.github_owner_id
   github_repo       = var.baseline_repo
+  github_repo_id    = var.baseline_repo_id
   subject_claims    = ["pull_request"]
   policy_json       = local.baseline_plan_policy
 }
@@ -75,7 +77,9 @@ module "baseline_apply" {
   description       = "GitHub Actions role for terraform apply on ${var.github_owner}/${var.baseline_repo} (production environment only)."
   oidc_provider_arn = aws_iam_openid_connect_provider.github.arn
   github_owner      = var.github_owner
+  github_owner_id   = var.github_owner_id
   github_repo       = var.baseline_repo
+  github_repo_id    = var.baseline_repo_id
   subject_claims    = ["environment:production"]
   policy_json       = local.baseline_apply_policy
 }

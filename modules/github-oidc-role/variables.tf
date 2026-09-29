@@ -19,13 +19,33 @@ variable "github_owner" {
   type        = string
 }
 
+variable "github_owner_id" {
+  description = "Numeric GitHub ID of the owner. GitHub Actions OIDC uses immutable subjects (repo:<owner>@<owner_id>/<repo>@<repo_id>:<claim>), so an owner rename or a different account reusing the name cannot inherit access."
+  type        = number
+
+  validation {
+    condition     = var.github_owner_id > 0 && var.github_owner_id == floor(var.github_owner_id)
+    error_message = "github_owner_id must be a positive whole number."
+  }
+}
+
 variable "github_repo" {
   description = "GitHub repository name."
   type        = string
 }
 
+variable "github_repo_id" {
+  description = "Numeric GitHub ID of the repository. Part of the immutable OIDC subject, so a renamed, deleted and re-created, or transferred repo with the same name cannot inherit access. Find it with: gh api repos/OWNER/REPO/actions/oidc/customization/sub -q .sub_claim_prefix"
+  type        = number
+
+  validation {
+    condition     = var.github_repo_id > 0 && var.github_repo_id == floor(var.github_repo_id)
+    error_message = "github_repo_id must be a positive whole number."
+  }
+}
+
 variable "subject_claims" {
-  description = "Allowed OIDC subject suffixes after 'repo:<owner>/<repo>:', e.g. 'ref:refs/heads/main', 'pull_request', 'environment:production'."
+  description = "Allowed OIDC subject suffixes after 'repo:<owner>@<owner_id>/<repo>@<repo_id>:', e.g. 'ref:refs/heads/main', 'pull_request', 'environment:production'."
   type        = list(string)
 
   validation {

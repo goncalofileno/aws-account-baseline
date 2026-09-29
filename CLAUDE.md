@@ -23,6 +23,8 @@ his CV site (`../cv-site`, see its `CLAUDE.md`). The design is in `docs/specs/`.
 - Any IAM change (roles, policies, boundary, deny statements) must keep the allow-list/exact-match
   assertions in `tests/*.tftest.hcl` passing, and should be mutation-checked: temporarily broaden a
   statement or drop a condition and confirm the relevant test fails before reverting.
+- OIDC trust uses GitHub immutable subjects: `repo:<owner>@<id>/<repo>@<id>:<claim>` (IDs from
+  `gh api repos/OWNER/REPO/actions/oidc/customization/sub -q .sub_claim_prefix`).
 - Every resource carries the required tags from `docs/tagging-policy.md`.
 
 ## Change flow
