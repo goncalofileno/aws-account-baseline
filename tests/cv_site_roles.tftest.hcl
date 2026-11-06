@@ -373,7 +373,7 @@ run "cv_site_deploy_policy_matches_exactly" {
         Condition = { StringEquals = { "lambda:Principal" = "apigateway.amazonaws.com" } }
       }
       HttpApis = {
-        Effect    = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
+        Effect    = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE", "apigateway:TagResource", "apigateway:UntagResource"]
         Resource  = ["arn:aws:apigateway:eu-north-1::/apis", "arn:aws:apigateway:eu-north-1::/apis/*", "arn:aws:apigateway:eu-north-1::/tags/*"]
         Condition = null
       }
