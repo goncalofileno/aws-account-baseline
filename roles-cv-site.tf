@@ -96,7 +96,8 @@ locals {
         Condition = { StringEquals = { "lambda:Principal" = "apigateway.amazonaws.com" } }
       },
       # API Gateway v2 only supports path-style resources, scoped here to the region's APIs.
-      { Sid = "HttpApis", Effect = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"], Resource = local.cv_site_apis },
+      # Tag-on-create (stages, APIs) is authorised as apigateway:TagResource on the new resource.
+      { Sid = "HttpApis", Effect = "Allow", Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE", "apigateway:TagResource", "apigateway:UntagResource"], Resource = local.cv_site_apis },
       {
         Sid      = "SiteLogGroups"
         Effect   = "Allow"
