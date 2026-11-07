@@ -1,4 +1,11 @@
-mock_provider "aws" {}
+mock_provider "aws" {
+  # The subscription validates monitor_arn_list as ARNs; OpenTofu's plan rejects a random mock string.
+  mock_resource "aws_ce_anomaly_monitor" {
+    defaults = {
+      arn = "arn:aws:ce::123456789012:anomalymonitor/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
 
 variables {
   # Forced by the Repository tag regex (docs/tagging-policy.md), not "any owner". These runs can't

@@ -55,6 +55,7 @@ aws-account-baseline/
 ├─ roles-cv-site.tf           # cv-site-deploy, cv-site-preview, cv-site-boundary
 ├─ roles-baseline.tf          # baseline-plan, baseline-apply
 ├─ budget.tf
+├─ anomaly.tf                 # Cost Anomaly Detection monitor + subscription (§4.6)
 ├─ cloudtrail.tf
 ├─ variables.tf · outputs.tf · versions.tf
 ├─ tests/                     # terraform test files (*.tftest.hcl) using mock providers
@@ -145,6 +146,12 @@ needs the lock). The two Cost Explorer create actions (`ce:CreateAnomalyMonitor`
 - Monthly cost budget, limit **USD 5**.
 - Notifications by email to `var.alert_email`: **forecasted** spend > 40 % (USD 2) and **actual**
   spend > 100 % (USD 5).
+- **Cost Anomaly Detection** (added after go-live, free): an AWS-managed "AWS services" monitor
+  (`monitor_type = DIMENSIONAL`, `monitor_dimension = SERVICE`; AWS allows one per account) and a
+  `DAILY` email subscription to `var.alert_email` that fires when an anomaly's
+  `ANOMALY_TOTAL_IMPACT_ABSOLUTE` is at least USD 1. The budget catches a month going over; this
+  catches a one-service spike that is still small in monthly terms. The IAM permissions shipped in a
+  separate, earlier change because the apply role can't use a permission granted in the same apply.
 
 ### 4.7 CloudTrail
 
@@ -187,6 +194,8 @@ the same run.
 - `cv-site-deploy` can only create roles when the `cv-site-boundary` boundary is set.
 - Both buckets block all public access and deny non-TLS requests.
 - The budget limit is 5 USD with the two notifications described in §4.6.
+- The anomaly monitor is `DIMENSIONAL`/`SERVICE`, and its subscription is `DAILY`, emails only
+  `var.alert_email`, and has exactly the `ANOMALY_TOTAL_IMPACT_ABSOLUTE >= 1` threshold.
 - The CloudTrail trail is multi-region with log file validation enabled.
 
 ## 8. Manual steps (documented in the README)
@@ -225,8 +234,8 @@ setup by the owner.
 
 ## 9. Cost
 
-About USD 0/month: IAM, OIDC, Budgets (first two free) and a management-events trail are free;
-S3 for state and trail logs costs cents.
+About USD 0/month: IAM, OIDC, Budgets (first two free), Cost Anomaly Detection and a
+management-events trail are free; S3 for state and trail logs costs cents.
 
 ## 10. Error handling and operations
 

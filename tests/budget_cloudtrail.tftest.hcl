@@ -4,6 +4,13 @@ mock_provider "aws" {
       account_id = "123456789012"
     }
   }
+
+  # The subscription validates monitor_arn_list as ARNs; a random mock string is rejected.
+  mock_resource "aws_ce_anomaly_monitor" {
+    defaults = {
+      arn = "arn:aws:ce::123456789012:anomalymonitor/00000000-0000-0000-0000-000000000000"
+    }
+  }
 }
 
 variables {
