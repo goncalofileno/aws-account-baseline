@@ -126,8 +126,12 @@ the deploy role; no write actions.
 | `baseline-apply` | `repo:<owner>@<owner_id>/aws-account-baseline@<repo_id>:environment:production` | `terraform apply` |
 
 `baseline-apply` may manage IAM (OIDC provider, `cv-site-*`, `baseline-*` roles/policies),
-CloudTrail, Budgets, and the state and trail buckets. `baseline-plan` gets read-only on those plus
-read/write on the state lockfile object (plan needs the lock).
+CloudTrail, Budgets, Cost Anomaly Detection monitors and subscriptions, and the state and trail
+buckets. `baseline-plan` gets read-only on those plus read/write on the state lockfile object (plan
+needs the lock). The two Cost Explorer create actions (`ce:CreateAnomalyMonitor`,
+`ce:CreateAnomalySubscription`) have no resource type in the IAM reference, so they are granted on
+`*`; every other anomaly action is scoped to `arn:aws:ce::<account>:anomalymonitor/*` and
+`anomalysubscription/*`.
 
 ### 4.6 Budget
 
