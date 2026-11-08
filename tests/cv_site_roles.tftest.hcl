@@ -299,7 +299,7 @@ run "cv_site_deploy_policy_matches_exactly" {
   assert {
     condition = alltrue([
       for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
-      can(regex("^(s3|cloudfront|acm|lambda|apigateway|logs|ssm|kms|ses|iam):[A-Za-z*]+$", a))
+      can(regex("^(s3|cloudfront|acm|lambda|apigateway|logs|ssm|kms|ses|cloudwatch|sns|iam):[A-Za-z*]+$", a))
     ])
     error_message = "Every deploy Allow action must match <known-service>:<Word-or-*>, case-sensitive, no digits or '?'."
   }
@@ -310,7 +310,7 @@ run "cv_site_deploy_policy_matches_exactly" {
       "CreateSiteBuckets", "SiteBuckets", "CloudFront", "AcmForCloudFront", "SiteFunctions",
       "SiteFunctionPermissions", "HttpApis", "SiteLogGroups", "DescribeLogGroups", "SiteParameters",
       "DescribeParameters", "SsmKmsViaService", "SesIdentityManagement", "SesListIdentities",
-      "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
+      "SiteAlarms", "SiteAlertTopics", "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
       "DenyTouchingCiRoles", "DenyRemovingBoundary", "DenyChangingBoundaryPolicy", "DenyBaselineRoles",
     ]
     error_message = "cv-site-deploy policy must declare exactly these statements, in this order."
@@ -403,6 +403,22 @@ run "cv_site_deploy_policy_matches_exactly" {
         Condition = null
       }
       SesListIdentities = { Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = ["*"], Condition = null }
+      SiteAlarms = {
+        Effect    = "Allow"
+        Action    = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"]
+        Resource  = ["arn:aws:cloudwatch:us-east-1:123456789012:alarm:cv-site-*"]
+        Condition = null
+      }
+      SiteAlertTopics = {
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes",
+          "sns:Subscribe", "sns:Unsubscribe", "sns:GetSubscriptionAttributes",
+          "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource",
+        ]
+        Resource  = ["arn:aws:sns:us-east-1:123456789012:cv-site-*"]
+        Condition = null
+      }
       CreateRolesOnlyWithBoundary = {
         Effect    = "Allow"
         Action    = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
@@ -461,7 +477,8 @@ run "cv_site_preview_policy_matches_exactly" {
   # (e.g. a smuggled-in write action hidden behind a new Sid).
   assert {
     condition = [for s in jsondecode(module.cv_site_preview.policy).Statement : s.Sid] == [
-      "S3ReadBucketConfig", "CloudFrontRead", "AcmRead", "LambdaRead", "ApiRead", "LogsRead", "SsmMetadataRead", "SesRead", "IamRead",
+      "S3ReadBucketConfig", "CloudFrontRead", "AcmRead", "LambdaRead", "ApiRead", "LogsRead", "SsmMetadataRead", "SesRead",
+      "AlarmRead", "AlertTopicRead", "IamRead",
     ]
     error_message = "cv-site-preview policy must declare exactly these statements, in this order."
   }
@@ -493,6 +510,16 @@ run "cv_site_preview_policy_matches_exactly" {
       LogsRead        = { Effect = "Allow", Action = ["logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = ["*"], Condition = null }
       SsmMetadataRead = { Effect = "Allow", Action = ["ssm:DescribeParameters", "ssm:ListTagsForResource"], Resource = ["*"], Condition = null }
       SesRead         = { Effect = "Allow", Action = ["ses:Get*", "ses:List*"], Resource = ["*"], Condition = null }
+      AlarmRead = {
+        Effect    = "Allow", Action = ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"]
+        Resource  = ["arn:aws:cloudwatch:us-east-1:123456789012:alarm:cv-site-*"]
+        Condition = null
+      }
+      AlertTopicRead = {
+        Effect    = "Allow", Action = ["sns:GetTopicAttributes", "sns:GetSubscriptionAttributes", "sns:ListTagsForResource"]
+        Resource  = ["arn:aws:sns:us-east-1:123456789012:cv-site-*"]
+        Condition = null
+      }
       IamRead = {
         Effect    = "Allow", Action = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"]
         Resource  = ["arn:aws:iam::123456789012:role/cv-site-*"]

@@ -60,6 +60,10 @@ flowchart LR
   (`lambda:Principal`). The role can only create `cv-site-*` roles that carry the `cv-site-boundary`
   permissions boundary, `iam:PassRole` only to `lambda.amazonaws.com`, and it cannot change the
   boundary, and cannot touch the CI roles (itself and `cv-site-preview`) or any `baseline-*` role.
+- **Traffic alarms stay in their lane.** `cv-site-deploy` manages CloudWatch alarms and the SNS
+  alert topic (with its email subscription) only under the `cv-site-*` names in `us-east-1`, where
+  CloudFront publishes its metrics. Every one of those actions takes a resource ARN, so none is
+  granted on `*`; there is no `sns:Publish`. `cv-site-preview` can only describe them.
 - **Human-approved applies.** IAM changes to this repo go through a GitHub Environment with a required reviewer.
 - **Quiet public logs.** CI prints plan and apply summaries only, so account-specific ARNs do not appear in public logs.
 

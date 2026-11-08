@@ -106,6 +106,11 @@ full subject, never a bare wildcard on the repo).
 - CloudWatch Logs: manage `log-group:/aws/lambda/cv-site-*`.
 - SSM: manage `parameter/cv-site/*`.
 - SES: manage identities and send-related configuration.
+- CloudWatch alarms and SNS (`us-east-1`, where CloudFront publishes its metrics): put/delete/describe
+  and tag `alarm:cv-site-*`; create/delete/configure and tag the `cv-site-*` topics and manage their
+  subscriptions (`Subscribe`, `Unsubscribe`, `GetSubscriptionAttributes`). Every action takes the
+  alarm or topic resource type, so nothing is on `*`. These back the site's CloudFront traffic
+  alarms, which email the owner.
 - IAM: `CreateRole`/`PutRolePolicy`/`AttachRolePolicy`/`DeleteRole…` on `role/cv-site-*` **only if**
   `iam:PermissionsBoundary` equals the `cv-site-boundary` ARN; `iam:PassRole` on `role/cv-site-*`
   to `lambda.amazonaws.com` only.
@@ -116,7 +121,9 @@ execution role): allows only CloudWatch Logs on `/aws/lambda/cv-site-*`, `ssm:Ge
 `parameter/cv-site/*`, `kms:Decrypt` via SSM with the AWS-managed key, and `ses:SendEmail`/`SendRawEmail`.
 
 **`cv-site-preview` policy:** `Get*`/`List*`/`Describe*` on the same services and resources as
-the deploy role; no write actions.
+the deploy role; no write actions. For the alarms that is `cloudwatch:DescribeAlarms` and
+`ListTagsForResource` on `alarm:cv-site-*`, and `sns:GetTopicAttributes`,
+`GetSubscriptionAttributes` and `ListTagsForResource` on the `cv-site-*` topics.
 
 ### 4.5 Roles for this repo
 
