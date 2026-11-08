@@ -63,10 +63,14 @@ flowchart LR
   (`lambda:Principal`). The role can only create `cv-site-*` roles that carry the `cv-site-boundary`
   permissions boundary, `iam:PassRole` only to `lambda.amazonaws.com`, and it cannot change the
   boundary, and cannot touch the CI roles (itself and `cv-site-preview`) or any `baseline-*` role.
-- **Traffic alarms stay in their lane.** `cv-site-deploy` manages CloudWatch alarms and the SNS
-  alert topic (with its email subscription) only under the `cv-site-*` names in `us-east-1`, where
-  CloudFront publishes its metrics. Every one of those actions takes a resource ARN, so none is
-  granted on `*`; there is no `sns:Publish`. `cv-site-preview` can only describe them.
+- **Traffic alarms stay in their lane.** `cv-site-deploy` manages CloudWatch alarms only under
+  the `cv-site-*` names in `us-east-1`, where CloudFront publishes its metrics. They email the owner
+  through AWS User Notifications (the region SCP denies SNS there): the role gets the explicit list
+  of hub, configuration, event-rule, channel and email-contact calls the provider makes, on `*`
+  because the hub and List calls take no resource and the rest have random IDs. A new email contact
+  receives nothing until its owner clicks the activation link. `cv-site-preview` can only read them.
+  Both roles may call `organizations:DescribeOrganization` (read-only), so the deploy workflow can
+  mask the organization and management account IDs before anything prints them.
 - **Human-approved applies.** IAM changes to this repo go through a GitHub Environment with a required reviewer.
 - **Quiet public logs.** CI prints plan and apply summaries only, so account-specific ARNs do not appear in public logs.
 
@@ -161,7 +165,10 @@ upgraded to the Paid plan with "advanced AWS features" activated. That makes it 
 (a management account used only for org/billing admin, this project account, and an AWS-created
 Identity Delegated Admin account), and AWS-managed SCPs are already in place — including a region
 floor that only allows `eu-north-1` (this project's home region), `us-east-1` and `us-west-2` (plus
-global/unspecified requests). `var.region` is validated against that list. There are no IAM users
+global/unspecified requests). `var.region` is validated against that list. Outside `eu-north-1` the
+floor only lets some services through: ACM, CloudWatch, Cost Explorer and AWS User Notifications
+work in `us-east-1`, SNS and EventBridge do not (which is why the cv-site traffic alarms email the
+owner through User Notifications, not an SNS topic). There are no IAM users
 and no IAM Identity Center setup by the owner.
 
 1. Root user (management account): enable MFA and make sure no root access keys exist. It is used

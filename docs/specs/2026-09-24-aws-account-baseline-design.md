@@ -107,11 +107,14 @@ full subject, never a bare wildcard on the repo).
 - CloudWatch Logs: manage `log-group:/aws/lambda/cv-site-*`.
 - SSM: manage `parameter/cv-site/*`.
 - SES: manage identities and send-related configuration.
-- CloudWatch alarms and SNS (`us-east-1`, where CloudFront publishes its metrics): put/delete/describe
-  and tag `alarm:cv-site-*`; create/delete/configure and tag the `cv-site-*` topics and manage their
-  subscriptions (`Subscribe`, `Unsubscribe`, `GetSubscriptionAttributes`). Every action takes the
-  alarm or topic resource type, so nothing is on `*`. These back the site's CloudFront traffic
-  alarms, which email the owner.
+- CloudWatch alarms (`us-east-1`, where CloudFront publishes its metrics): put/delete/describe and
+  tag `alarm:cv-site-*`. These back the site's CloudFront traffic alarms.
+- AWS User Notifications, which emails the owner when an alarm changes state (the account's region
+  SCP denies SNS and EventBridge in `us-east-1`, so an SNS topic is not an option): an explicit list
+  of `notifications:` hub, configuration, event-rule and channel calls and `notifications-contacts:`
+  email-contact calls, on `*` (the hub and List calls take no resource; the others have random IDs).
+- `organizations:DescribeOrganization` (read-only), so the workflow can mask the organization and
+  management account IDs, which an SCP denial message would otherwise print.
 - IAM: `CreateRole`/`PutRolePolicy`/`AttachRolePolicy`/`DeleteRole…` on `role/cv-site-*` **only if**
   `iam:PermissionsBoundary` equals the `cv-site-boundary` ARN; `iam:PassRole` on `role/cv-site-*`
   to `lambda.amazonaws.com` only.
@@ -123,8 +126,8 @@ execution role): allows only CloudWatch Logs on `/aws/lambda/cv-site-*`, `ssm:Ge
 
 **`cv-site-preview` policy:** `Get*`/`List*`/`Describe*` on the same services and resources as
 the deploy role; no write actions. For the alarms that is `cloudwatch:DescribeAlarms` and
-`ListTagsForResource` on `alarm:cv-site-*`, and `sns:GetTopicAttributes`,
-`GetSubscriptionAttributes` and `ListTagsForResource` on the `cv-site-*` topics.
+`ListTagsForResource` on `alarm:cv-site-*`, `notifications:Get*`/`List*` and
+`notifications-contacts:Get*`/`List*`, plus `organizations:DescribeOrganization` for the same masking.
 
 ### 4.5 Roles for this repo
 
