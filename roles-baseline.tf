@@ -2,6 +2,11 @@ locals {
   state_bucket_arn = "arn:aws:s3:::${local.state_bucket_name}"
   trail_bucket_arn = "arn:aws:s3:::${local.trail_bucket_name}"
   budget_arns      = "arn:aws:budgets::${local.account_id}:budget/*"
+  # Cost Anomaly Detection (Cost Explorer) ARNs are global: no region segment.
+  anomaly_arns = [
+    "arn:aws:ce::${local.account_id}:anomalymonitor/*",
+    "arn:aws:ce::${local.account_id}:anomalysubscription/*",
+  ]
 
   s3_bucket_config_read = [
     "s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration",
@@ -18,6 +23,7 @@ locals {
       { Sid = "CloudTrailRead", Effect = "Allow", Action = ["cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*"], Resource = "*" },
       { Sid = "BudgetsRead", Effect = "Allow", Action = ["budgets:ViewBudget", "budgets:ListTagsForResource"], Resource = local.budget_arns },
       { Sid = "TrailBucketConfigRead", Effect = "Allow", Action = local.s3_bucket_config_read, Resource = local.trail_bucket_arn },
+      { Sid = "AnomalyDetectionRead", Effect = "Allow", Action = ["ce:GetAnomalyMonitors", "ce:GetAnomalySubscriptions", "ce:ListTagsForResource"], Resource = local.anomaly_arns },
     ]
   })
 
@@ -52,6 +58,21 @@ locals {
       # own role above, baseline-apply is effectively account-admin-equivalent. The real control is the production environment's required
       # reviewer.
       { Sid = "TrailBucket", Effect = "Allow", Action = "s3:*", Resource = local.trail_bucket_arn },
+      # ce:CreateAnomalyMonitor and ce:CreateAnomalySubscription have no resource type in the IAM
+      # service authorization reference (the ARN doesn't exist until the call returns), so "*" is
+      # the only valid Resource. They can only create cost-monitoring objects in this account.
+      # Tag-on-create is authorised as ce:TagResource on the new ARN (AnomalyDetection below).
+      { Sid = "AnomalyDetectionCreate", Effect = "Allow", Action = ["ce:CreateAnomalyMonitor", "ce:CreateAnomalySubscription"], Resource = "*" },
+      {
+        Sid    = "AnomalyDetection"
+        Effect = "Allow"
+        Action = [
+          "ce:GetAnomalyMonitors", "ce:UpdateAnomalyMonitor", "ce:DeleteAnomalyMonitor",
+          "ce:GetAnomalySubscriptions", "ce:UpdateAnomalySubscription", "ce:DeleteAnomalySubscription",
+          "ce:TagResource", "ce:UntagResource", "ce:ListTagsForResource",
+        ]
+        Resource = local.anomaly_arns
+      },
     ]
   })
 }

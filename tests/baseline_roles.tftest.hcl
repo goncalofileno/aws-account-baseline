@@ -58,6 +58,7 @@ run "baseline_plan_only_writes_the_lock_file" {
   assert {
     condition = [for s in jsondecode(module.baseline_plan.policy).Statement : s.Sid] == [
       "StateList", "StateRead", "StateLock", "IamRead", "CloudTrailRead", "BudgetsRead", "TrailBucketConfigRead",
+      "AnomalyDetectionRead",
     ]
     error_message = "baseline-plan policy must declare exactly these statements, in this order."
   }
@@ -88,6 +89,11 @@ run "baseline_plan_only_writes_the_lock_file" {
         ]
         Resource = ["arn:aws:s3:::gf-cloudtrail-123456789012"]
       }
+      AnomalyDetectionRead = {
+        Effect   = "Allow"
+        Action   = ["ce:GetAnomalyMonitors", "ce:GetAnomalySubscriptions", "ce:ListTagsForResource"]
+        Resource = ["arn:aws:ce::123456789012:anomalymonitor/*", "arn:aws:ce::123456789012:anomalysubscription/*"]
+      }
     }
     error_message = "baseline-plan policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }
@@ -112,7 +118,8 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
   assert {
     condition = [for s in jsondecode(module.baseline_apply.policy).Statement : s.Sid] == [
       "StateList", "StateReadWrite", "StateLock", "IamRead", "GithubOidcProvider", "ManagedIam",
-      "CloudTrailManage", "CloudTrailRead", "Budgets", "TrailBucket",
+      "CloudTrailManage", "CloudTrailRead", "Budgets", "TrailBucket", "AnomalyDetectionCreate",
+      "AnomalyDetection",
     ]
     error_message = "baseline-apply policy must declare exactly these statements, in this order."
   }
@@ -152,6 +159,17 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
       CloudTrailRead   = { Effect = "Allow", Action = ["cloudtrail:Describe*", "cloudtrail:Get*", "cloudtrail:List*"], Resource = ["*"] }
       Budgets          = { Effect = "Allow", Action = ["budgets:ModifyBudget", "budgets:ViewBudget", "budgets:TagResource", "budgets:UntagResource", "budgets:ListTagsForResource"], Resource = ["arn:aws:budgets::123456789012:budget/*"] }
       TrailBucket      = { Effect = "Allow", Action = ["s3:*"], Resource = ["arn:aws:s3:::gf-cloudtrail-123456789012"] }
+      # The two create actions have no resource type in the IAM reference, so "*" is the only option.
+      AnomalyDetectionCreate = { Effect = "Allow", Action = ["ce:CreateAnomalyMonitor", "ce:CreateAnomalySubscription"], Resource = ["*"] }
+      AnomalyDetection = {
+        Effect = "Allow"
+        Action = [
+          "ce:GetAnomalyMonitors", "ce:UpdateAnomalyMonitor", "ce:DeleteAnomalyMonitor",
+          "ce:GetAnomalySubscriptions", "ce:UpdateAnomalySubscription", "ce:DeleteAnomalySubscription",
+          "ce:TagResource", "ce:UntagResource", "ce:ListTagsForResource",
+        ]
+        Resource = ["arn:aws:ce::123456789012:anomalymonitor/*", "arn:aws:ce::123456789012:anomalysubscription/*"]
+      }
     }
     error_message = "baseline-apply policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }

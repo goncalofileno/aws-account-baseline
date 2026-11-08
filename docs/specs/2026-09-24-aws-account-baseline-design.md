@@ -106,6 +106,11 @@ full subject, never a bare wildcard on the repo).
 - CloudWatch Logs: manage `log-group:/aws/lambda/cv-site-*`.
 - SSM: manage `parameter/cv-site/*`.
 - SES: manage identities and send-related configuration.
+- CloudWatch alarms and SNS (`us-east-1`, where CloudFront publishes its metrics): put/delete/describe
+  and tag `alarm:cv-site-*`; create/delete/configure and tag the `cv-site-*` topics and manage their
+  subscriptions (`Subscribe`, `Unsubscribe`, `GetSubscriptionAttributes`). Every action takes the
+  alarm or topic resource type, so nothing is on `*`. These back the site's CloudFront traffic
+  alarms, which email the owner.
 - IAM: `CreateRole`/`PutRolePolicy`/`AttachRolePolicy`/`DeleteRole…` on `role/cv-site-*` **only if**
   `iam:PermissionsBoundary` equals the `cv-site-boundary` ARN; `iam:PassRole` on `role/cv-site-*`
   to `lambda.amazonaws.com` only.
@@ -116,7 +121,9 @@ execution role): allows only CloudWatch Logs on `/aws/lambda/cv-site-*`, `ssm:Ge
 `parameter/cv-site/*`, `kms:Decrypt` via SSM with the AWS-managed key, and `ses:SendEmail`/`SendRawEmail`.
 
 **`cv-site-preview` policy:** `Get*`/`List*`/`Describe*` on the same services and resources as
-the deploy role; no write actions.
+the deploy role; no write actions. For the alarms that is `cloudwatch:DescribeAlarms` and
+`ListTagsForResource` on `alarm:cv-site-*`, and `sns:GetTopicAttributes`,
+`GetSubscriptionAttributes` and `ListTagsForResource` on the `cv-site-*` topics.
 
 ### 4.5 Roles for this repo
 
@@ -126,8 +133,12 @@ the deploy role; no write actions.
 | `baseline-apply` | `repo:<owner>@<owner_id>/aws-account-baseline@<repo_id>:environment:production` | `terraform apply` |
 
 `baseline-apply` may manage IAM (OIDC provider, `cv-site-*`, `baseline-*` roles/policies),
-CloudTrail, Budgets, and the state and trail buckets. `baseline-plan` gets read-only on those plus
-read/write on the state lockfile object (plan needs the lock).
+CloudTrail, Budgets, Cost Anomaly Detection monitors and subscriptions, and the state and trail
+buckets. `baseline-plan` gets read-only on those plus read/write on the state lockfile object (plan
+needs the lock). The two Cost Explorer create actions (`ce:CreateAnomalyMonitor`,
+`ce:CreateAnomalySubscription`) have no resource type in the IAM reference, so they are granted on
+`*`; every other anomaly action is scoped to `arn:aws:ce::<account>:anomalymonitor/*` and
+`anomalysubscription/*`.
 
 ### 4.6 Budget
 
