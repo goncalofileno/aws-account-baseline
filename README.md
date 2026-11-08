@@ -1,7 +1,8 @@
 # aws-account-baseline
 
 Terraform that prepares my personal AWS account for [`cv-site`](https://github.com/goncalofileno/cv-site):
-keyless GitHub Actions access through OIDC, least-privilege deploy roles, a cost budget and an audit trail.
+keyless GitHub Actions access through OIDC, least-privilege deploy roles, a cost budget, cost anomaly
+alerts and an audit trail.
 
 The code is CI-tested with **Terraform and OpenTofu**. Every change is linted, security-scanned, unit-tested
 with mock providers and planned on the PR, then applied only after manual approval.
@@ -16,6 +17,7 @@ with mock providers and planned on the PR, then applied only after manual approv
 | `cv-site-boundary` policy | Permissions boundary: roles created by the site can only log, read their SSM parameters and send email |
 | `baseline-plan` / `baseline-apply` roles | This repo's own CI (plan on PRs; apply only from the protected `production` environment) |
 | `monthly-cost` budget | Email alerts at USD 2 forecast / USD 5 actual |
+| `aws-services` anomaly monitor + `aws-services-daily` subscription | Cost Anomaly Detection on every AWS service; daily email when an anomaly's total impact is at least USD 1 |
 | CloudTrail `baseline-management-events` | Multi-region audit trail with log file validation; log objects expire after 90 days (noncurrent versions deleted 30 days after that) |
 | Tagging | Every resource here and in `bootstrap/` is tagged (`Project`, `Component`, `Environment`, `ManagedBy`, `Repository`, `Owner`) via `modules/tags` + the provider's `default_tags` — see [`docs/tagging-policy.md`](docs/tagging-policy.md) |
 
@@ -29,6 +31,7 @@ flowchart LR
     BD[cv-site-boundary]
     T[CloudTrail] --> S3[(gf-cloudtrail bucket)]
     Budget[Budget USD 5]
+    Anomaly[Cost anomaly monitor]
   end
   subgraph GitHub
     A[cv-site: main]
@@ -106,7 +109,17 @@ condition makes the corresponding test fail.
 
 ## Cost
 
-About USD 0/month. IAM, OIDC, the first two budgets and one management-events trail are free. S3 storage costs cents.
+About USD 0/month. IAM, OIDC, the first two budgets, Cost Anomaly Detection and one management-events
+trail are free. S3 storage costs cents.
+
+Two cost alarms, on purpose:
+
+- **Budget** (`budget.tf`): catches a month heading over USD 5 (forecast at USD 2, actual at USD 5).
+- **Cost Anomaly Detection** (`anomaly.tf`): catches a sudden spike in any one service, scored per
+  day, even when the monthly total is still small. The monitor is the AWS-managed "AWS services"
+  monitor (`DIMENSIONAL`/`SERVICE`), of which AWS allows **one per account**: if one already exists
+  (`aws ce get-anomaly-monitors --region us-east-1`), import it instead of creating a second. Detection
+  needs about 10 days of usage history and runs up to 24 hours after the usage.
 
 ## Layout
 
@@ -115,7 +128,7 @@ bootstrap/            state bucket (local state, applied once)
 modules/secure-bucket private, versioned, TLS-only, SSE-S3 bucket
 modules/github-oidc-role  IAM role assumable from one GitHub repo + claims
 modules/tags          standard tag map (Project/Component/Environment/ManagedBy/Repository/Owner)
-*.tf                  root module (S3 backend with native locking)
+*.tf                  root module (S3 backend with native locking; anomaly.tf = Cost Anomaly Detection)
 tests/                terraform test with mock providers
 docs/tagging-policy.md  tag keys, allowed values and how each repo enforces them
 ```
