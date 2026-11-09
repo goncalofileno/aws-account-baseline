@@ -325,7 +325,7 @@ run "cv_site_deploy_policy_matches_exactly" {
   assert {
     condition = alltrue([
       for a in flatten([for s in jsondecode(module.cv_site_deploy.policy).Statement : s.Action if s.Effect == "Allow"]) :
-      can(regex("^(s3|cloudfront|acm|lambda|apigateway|logs|ssm|kms|ses|cloudwatch|notifications|notifications-contacts|organizations|iam):[A-Za-z*]+$", a))
+      can(regex("^(s3|cloudfront|acm|lambda|apigateway|logs|ssm|kms|ses|organizations|iam):[A-Za-z*]+$", a))
     ])
     error_message = "Every deploy Allow action must match <known-service>:<Word-or-*>, case-sensitive, no digits or '?'."
   }
@@ -336,7 +336,7 @@ run "cv_site_deploy_policy_matches_exactly" {
       "CreateSiteBuckets", "SiteBuckets", "CloudFront", "AcmForCloudFront", "SiteFunctions",
       "SiteFunctionPermissions", "HttpApis", "SiteLogGroups", "DescribeLogGroups", "SiteParameters",
       "DescribeParameters", "SsmKmsViaService", "SesIdentityManagement", "SesListIdentities",
-      "SiteAlarms", "SiteAlertNotifications", "DescribeOrganization", "KillSwitchState", "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
+      "DescribeOrganization", "KillSwitchState", "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
       "DenyTouchingCiRoles", "DenyRemovingBoundary", "DenyChangingBoundaryPolicy", "DenyBaselineRoles",
     ]
     error_message = "cv-site-deploy policy must declare exactly these statements, in this order."
@@ -428,31 +428,7 @@ run "cv_site_deploy_policy_matches_exactly" {
         Resource  = ["arn:aws:ses:eu-north-1:123456789012:identity/*"]
         Condition = null
       }
-      SesListIdentities = { Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = ["*"], Condition = null }
-      SiteAlarms = {
-        Effect    = "Allow"
-        Action    = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"]
-        Resource  = ["arn:aws:cloudwatch:us-east-1:123456789012:alarm:cv-site-*"]
-        Condition = null
-      }
-      SiteAlertNotifications = {
-        Effect = "Allow"
-        Action = [
-          "notifications:RegisterNotificationHub", "notifications:DeregisterNotificationHub", "notifications:ListNotificationHubs",
-          "notifications:CreateNotificationConfiguration", "notifications:GetNotificationConfiguration",
-          "notifications:UpdateNotificationConfiguration", "notifications:DeleteNotificationConfiguration",
-          "notifications:CreateEventRule", "notifications:GetEventRule", "notifications:UpdateEventRule",
-          "notifications:DeleteEventRule", "notifications:ListEventRules",
-          "notifications:AssociateChannel", "notifications:DisassociateChannel", "notifications:ListChannels",
-          "notifications:TagResource", "notifications:UntagResource", "notifications:ListTagsForResource",
-          "notifications-contacts:CreateEmailContact", "notifications-contacts:GetEmailContact",
-          "notifications-contacts:DeleteEmailContact", "notifications-contacts:ListEmailContacts",
-          "notifications-contacts:SendActivationCode",
-          "notifications-contacts:TagResource", "notifications-contacts:UntagResource", "notifications-contacts:ListTagsForResource",
-        ]
-        Resource  = ["*"]
-        Condition = null
-      }
+      SesListIdentities    = { Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = ["*"], Condition = null }
       DescribeOrganization = { Effect = "Allow", Action = ["organizations:DescribeOrganization"], Resource = ["*"], Condition = null }
       KillSwitchState      = { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = ["arn:aws:ssm:eu-north-1:123456789012:parameter/cost-kill-switch/state"], Condition = null }
       CreateRolesOnlyWithBoundary = {
@@ -514,7 +490,7 @@ run "cv_site_preview_policy_matches_exactly" {
   assert {
     condition = [for s in jsondecode(module.cv_site_preview.policy).Statement : s.Sid] == [
       "S3ReadBucketConfig", "CloudFrontRead", "AcmRead", "LambdaRead", "ApiRead", "LogsRead", "SsmMetadataRead", "SesRead",
-      "AlarmRead", "AlertNotificationsRead", "DescribeOrganization", "IamRead",
+      "DescribeOrganization", "IamRead",
     ]
     error_message = "cv-site-preview policy must declare exactly these statements, in this order."
   }
@@ -543,19 +519,9 @@ run "cv_site_preview_policy_matches_exactly" {
         Resource  = ["arn:aws:apigateway:eu-north-1::/apis", "arn:aws:apigateway:eu-north-1::/apis/*", "arn:aws:apigateway:eu-north-1::/tags/*"]
         Condition = null
       }
-      LogsRead        = { Effect = "Allow", Action = ["logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = ["*"], Condition = null }
-      SsmMetadataRead = { Effect = "Allow", Action = ["ssm:DescribeParameters", "ssm:ListTagsForResource"], Resource = ["*"], Condition = null }
-      SesRead         = { Effect = "Allow", Action = ["ses:Get*", "ses:List*"], Resource = ["*"], Condition = null }
-      AlarmRead = {
-        Effect    = "Allow", Action = ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"]
-        Resource  = ["arn:aws:cloudwatch:us-east-1:123456789012:alarm:cv-site-*"]
-        Condition = null
-      }
-      AlertNotificationsRead = {
-        Effect    = "Allow", Action = ["notifications:Get*", "notifications:List*", "notifications-contacts:Get*", "notifications-contacts:List*"]
-        Resource  = ["*"]
-        Condition = null
-      }
+      LogsRead             = { Effect = "Allow", Action = ["logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = ["*"], Condition = null }
+      SsmMetadataRead      = { Effect = "Allow", Action = ["ssm:DescribeParameters", "ssm:ListTagsForResource"], Resource = ["*"], Condition = null }
+      SesRead              = { Effect = "Allow", Action = ["ses:Get*", "ses:List*"], Resource = ["*"], Condition = null }
       DescribeOrganization = { Effect = "Allow", Action = ["organizations:DescribeOrganization"], Resource = ["*"], Condition = null }
       IamRead = {
         Effect    = "Allow", Action = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"]
