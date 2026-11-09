@@ -11,7 +11,8 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 
 import state as st
 from events import parse_event
@@ -161,7 +162,7 @@ class KillSwitch:
                 self.save_state(s)
             try:
                 self.set_distribution_enabled(d["Id"], False)
-            except ClientError:
+            except (ClientError, BotoCoreError):
                 LOG.exception("could not disable a distribution")
                 failures += 1
         for f in self.functions():
@@ -174,7 +175,7 @@ class KillSwitch:
                     s["concurrency"][name] = current
                     self.save_state(s)
                 self.set_reserved_concurrency(name, 0)
-            except ClientError:
+            except (ClientError, BotoCoreError):
                 LOG.exception("could not zero a function's concurrency")
                 failures += 1
         if failures:
@@ -211,7 +212,7 @@ class KillSwitch:
     def _estimate_or_none(self, now: datetime) -> float | None:
         try:
             return estimate_usd(self.usage(now))
-        except ClientError:
+        except (ClientError, BotoCoreError):
             LOG.exception("could not read metrics; tripping without an estimate")
             return None
 
@@ -220,12 +221,17 @@ class KillSwitch:
         if action == "ignore":
             LOG.info(json.dumps({"action": "ignore"}))
             return {"status": "ignored"}
+        enforced = False
         loaded = self.load_state()
         s = st.roll_month(loaded, now)
         if s is not loaded:
             self.save_state(s)
-        # A trip must not depend on metrics; everything else fails open when they can't be read.
-        estimate = self._estimate_or_none(now) if action == "trip" else estimate_usd(self.usage(now))
+        # A trip, and a switch that is already tripped, must not depend on metrics (enforcement has to
+        # go on); everything else fails open when they can't be read.
+        if action == "trip" or (action == "check" and s["status"] == st.TRIPPED):
+            estimate = self._estimate_or_none(now)
+        else:
+            estimate = estimate_usd(self.usage(now))
         if action == "check" and s["status"] == st.ARMED and over_threshold(estimate, s["acknowledged_usd"], self.threshold_usd):
             action = "trip"
             reason = (
@@ -237,13 +243,23 @@ class KillSwitch:
         elif action == "trip" and s["status"] == st.ARMED:
             s = st.tripped(s, reason=reason, now=now, estimate=estimate)
             self.save_state(s)
+            # Enforce first, then alert, so a failed alert can't delay the shutdown and a failed
+            # enforcement can't swallow the alert; the enforcement error is raised afterwards.
+            enforce_error = None
+            try:
+                s = self.enforce(s)
+            except Exception as e:  # noqa: BLE001
+                enforce_error = e
+            enforced = True
             self.alert(
                 "Cost kill switch TRIPPED",
                 f"Reason: {reason}\nTime: {s['tripped_at']}\nEstimated spend this month: {_usd(estimate)}\n"
                 "The site is going offline: every CloudFront distribution is being disabled and every other "
                 f"Lambda function's reserved concurrency set to 0.\n{REARM_HINT}",
             )
-        if s["status"] == st.TRIPPED and action != "status":
+            if enforce_error is not None:
+                raise enforce_error
+        if s["status"] == st.TRIPPED and action != "status" and not enforced:
             s = self.enforce(s)
         result = summary(s, estimate)
         LOG.info(json.dumps({"action": action, **result}))
@@ -251,14 +267,15 @@ class KillSwitch:
 
 
 def make_clients() -> dict:
+    config = Config(connect_timeout=5, read_timeout=10, retries={"mode": "standard", "max_attempts": 3})
     return {
-        "cloudwatch_us_east_1": boto3.client("cloudwatch", region_name="us-east-1"),  # CloudFront metrics
-        "cloudwatch": boto3.client("cloudwatch"),
-        "cloudfront": boto3.client("cloudfront"),
-        "lambda": boto3.client("lambda"),
-        "apigatewayv2": boto3.client("apigatewayv2"),
-        "ssm": boto3.client("ssm"),
-        "sns": boto3.client("sns"),
+        "cloudwatch_us_east_1": boto3.client("cloudwatch", region_name="us-east-1", config=config),  # CloudFront metrics
+        "cloudwatch": boto3.client("cloudwatch", config=config),
+        "cloudfront": boto3.client("cloudfront", config=config),
+        "lambda": boto3.client("lambda", config=config),
+        "apigatewayv2": boto3.client("apigatewayv2", config=config),
+        "ssm": boto3.client("ssm", config=config),
+        "sns": boto3.client("sns", config=config),
     }
 
 
@@ -267,13 +284,20 @@ _SWITCH = None
 
 def lambda_handler(event, context):
     global _SWITCH
-    if _SWITCH is None:
-        _SWITCH = KillSwitch(
-            make_clients(),
-            self_name=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
-            state_parameter=os.environ["STATE_PARAMETER"],
-            alerts_topic_arn=os.environ["ALERTS_TOPIC_ARN"],
-            trigger_topic_arn=os.environ["TRIGGER_TOPIC_ARN"],
-            threshold_usd=float(os.environ["THRESHOLD_USD"]),
-        )
-    return _SWITCH.run(event, datetime.now(timezone.utc))
+    try:
+        if _SWITCH is None:
+            _SWITCH = KillSwitch(
+                make_clients(),
+                self_name=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
+                state_parameter=os.environ["STATE_PARAMETER"],
+                alerts_topic_arn=os.environ["ALERTS_TOPIC_ARN"],
+                trigger_topic_arn=os.environ["TRIGGER_TOPIC_ARN"],
+                threshold_usd=float(os.environ["THRESHOLD_USD"]),
+            )
+        return _SWITCH.run(event, datetime.now(timezone.utc))
+    except Exception as e:
+        # Full detail stays in CloudWatch Logs; a synchronous caller only gets a code, never AWS text
+        # (which can carry account and resource ARNs).
+        LOG.exception("kill switch run failed")
+        code = e.response.get("Error", {}).get("Code", "ClientError") if isinstance(e, ClientError) else type(e).__name__
+        raise RuntimeError(f"kill switch failed: {code}") from None

@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 import handler
 import state as st
@@ -243,3 +243,136 @@ def test_a_distribution_and_a_function_are_recorded_before_they_are_changed():
     w.lambda_.put_function_concurrency = put_checked
     w.switch.run({"action": "check"}, NOW)
     assert seen == [True, True]
+
+
+def _tripped_world(**kw):
+    s = st.tripped(st.armed("2026-11"), reason="drill", now=NOW, estimate=1.0)
+    s["disabled_distributions"] = ["E1"]
+    return World(state=s, **kw)
+
+
+def test_a_tripped_check_enforces_even_when_metrics_cannot_be_read():
+    w = _tripped_world(cw_fail=True)
+    result = w.switch.run({"action": "check"}, NOW)
+    assert w.cloudfront.enabled["E1"] is False
+    assert result["estimate_usd"] is None
+    assert w.sns.published == []
+
+
+def test_a_tripped_check_enforces_when_a_read_times_out():
+    w = _tripped_world()
+
+    def timeout(**_):
+        raise EndpointConnectionError(endpoint_url="https://monitoring.example")
+
+    w.cw_us.get_metric_statistics = timeout
+    w.switch.run({"action": "check"}, NOW)
+    assert w.cloudfront.enabled["E1"] is False
+
+
+def test_status_and_rearm_still_fail_open_when_metrics_cannot_be_read():
+    for action in ({"action": "status"}, {"action": "rearm", "reason": "x"}):
+        w = _tripped_world(cw_fail=True)
+        with pytest.raises(ClientError):
+            w.switch.run(action, NOW)
+        assert w.cloudfront.updates == []
+
+
+def test_enforcement_counts_a_connection_error_as_a_failure_and_keeps_going():
+    w = World(dists={"E1": True, "E2": True}, cf_sums=FLOOD)
+
+    def flaky(Id, IfMatch, DistributionConfig):
+        if Id == "E1":
+            raise EndpointConnectionError(endpoint_url="https://cloudfront.example")
+        w.cloudfront.enabled[Id] = DistributionConfig["Enabled"]
+
+    w.cloudfront.update_distribution = flaky
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "check"}, NOW)
+    assert w.cloudfront.enabled["E2"] is False
+
+
+def _env(monkeypatch, clients):
+    monkeypatch.setenv("STATE_PARAMETER", PARAM)
+    monkeypatch.setenv("ALERTS_TOPIC_ARN", ALERTS)
+    monkeypatch.setenv("TRIGGER_TOPIC_ARN", TRIGGER)
+    monkeypatch.setenv("THRESHOLD_USD", "5")
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", SELF)
+    monkeypatch.setattr(handler, "make_clients", lambda: clients)
+    monkeypatch.setattr(handler, "_SWITCH", None)
+
+
+def test_errors_leaving_the_lambda_carry_a_code_but_no_aws_text(monkeypatch):
+    class Boom:
+        def get_parameter(self, **_):
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "not allowed: arn:aws:sts::123456789012:assumed-role/x"}},
+                "GetParameter",
+            )
+
+    _env(monkeypatch, {"ssm": Boom()})
+    with pytest.raises(RuntimeError) as info:
+        handler.lambda_handler({"action": "check"}, None)
+    assert "AccessDenied" in str(info.value)
+    assert "123456789012" not in str(info.value)
+    assert info.value.__suppress_context__ is True
+    assert info.value.__cause__ is None
+
+
+def test_an_unknown_action_surfaces_as_its_type_name(monkeypatch):
+    _env(monkeypatch, World().switch.c)
+    with pytest.raises(RuntimeError) as info:
+        handler.lambda_handler({"action": "explode"}, None)
+    assert str(info.value) == "kill switch failed: ValueError"
+
+
+def test_a_trip_email_is_sent_even_when_enforcement_fails():
+    w = World(dists={"E1": True, "E2": True}, cf_sums=FLOOD)
+
+    def flaky(Id, IfMatch, DistributionConfig):
+        if Id == "E1":
+            raise ClientError({"Error": {"Code": "PreconditionFailed", "Message": "x"}}, "UpdateDistribution")
+        w.cloudfront.enabled[Id] = DistributionConfig["Enabled"]
+
+    w.cloudfront.update_distribution = flaky
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "check"}, NOW)
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_enforcement_is_complete_when_the_trip_email_cannot_be_sent():
+    w = World(cf_sums=FLOOD)
+
+    def down(**_):
+        raise client_error_sns()
+
+    def client_error_sns():
+        return ClientError({"Error": {"Code": "InternalError", "Message": "x"}}, "Publish")
+
+    w.sns.publish = down
+    with pytest.raises(ClientError):
+        w.switch.run({"action": "check"}, NOW)
+    assert w.cloudfront.enabled["E1"] is False
+    assert w.lambda_.reserved["cv-site-contact"] == 0
+    assert w.ssm.state["status"] == "tripped"
+
+
+def test_a_trip_enforces_once_per_run():
+    w = World(cf_sums=FLOOD)
+    calls = []
+    original = w.switch.enforce
+    w.switch.enforce = lambda s: calls.append(1) or original(s)
+    w.switch.run({"action": "check"}, NOW)
+    assert calls == [1]
+
+
+def test_make_clients_use_short_timeouts_and_bounded_retries(monkeypatch):
+    for k, v in {"AWS_DEFAULT_REGION": "eu-north-1", "AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "x"}.items():
+        monkeypatch.setenv(k, v)
+    clients = handler.make_clients()
+    for client in clients.values():
+        cfg = client.meta.config
+        # botocore normalises max_attempts=3 (retries) to total_max_attempts=4 (calls)
+        assert (cfg.connect_timeout, cfg.read_timeout) == (5, 10)
+        assert cfg.retries == {"mode": "standard", "total_max_attempts": 4}
+    assert clients["cloudwatch_us_east_1"].meta.region_name == "us-east-1"
