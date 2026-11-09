@@ -83,6 +83,14 @@ def _with(**changes):
         _with(acknowledged_usd=True),
         _with(acknowledged_usd="1"),
         _with(estimate_usd="1"),
+        _with(acknowledged_usd=float("inf")),
+        _with(acknowledged_usd=float("nan")),
+        _with(estimate_usd=float("-inf")),
+        _with(estimate_usd=float("nan")),
+        _with(reason=None),
+        _with(tripped_at=None),
+        _with(reason=""),
+        _with(tripped_at=""),
         _with(tripped_at=5),
         _with(reason=5),
         _with(disabled_distributions="E1"),
@@ -94,6 +102,7 @@ def _with(**changes):
         {**st.armed("2026-11"), "disabled_distributions": ["E1"]},
         {**st.armed("2026-11"), "concurrency": {"f": 1}},
         {**st.armed("2026-11"), "reason": "left over"},
+        {**st.armed("2026-11"), "estimate_usd": 1.0},
     ],
 )
 def test_validate_rejects_malformed_documents(doc):
@@ -104,6 +113,13 @@ def test_validate_rejects_malformed_documents(doc):
 def test_parse_rejects_text_that_is_not_json():
     with pytest.raises(st.StateError):
         st.parse("not json")
+
+
+def test_parse_rejects_a_literal_nan():
+    text = st.dump(st.armed("2026-11")).replace('"acknowledged_usd":0.0', '"acknowledged_usd":NaN')
+    assert "NaN" in text
+    with pytest.raises(st.StateError):
+        st.parse(text)
 
 
 def test_dump_refuses_an_invalid_state():

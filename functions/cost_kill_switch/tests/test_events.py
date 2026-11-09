@@ -39,3 +39,19 @@ def test_a_record_from_the_trigger_topic_trips_with_reason_budget():
 def test_records_from_any_other_topic_are_ignored():
     other = "arn:aws:sns:eu-north-1:123456789012:something-else"
     assert parse_event(sns(other), TRIGGER) == ("ignore", None)
+
+
+@pytest.mark.parametrize("records", [[5], ["x"], [None], [{"EventSource": "aws:sns", "Sns": "x"}], [{"EventSource": "aws:sns", "Sns": None}]])
+def test_malformed_records_are_skipped(records):
+    assert parse_event({"Records": records}, TRIGGER) == ("ignore", None)
+
+
+def test_a_valid_record_after_a_malformed_one_still_trips():
+    event = {"Records": [5, *sns(TRIGGER)["Records"]]}
+    assert parse_event(event, TRIGGER) == ("trip", "budget")
+
+
+@pytest.mark.parametrize("records", [None, "x", {"a": 1}, 5])
+def test_records_that_is_not_a_list_raises(records):
+    with pytest.raises(ValueError):
+        parse_event({"Records": records}, TRIGGER)

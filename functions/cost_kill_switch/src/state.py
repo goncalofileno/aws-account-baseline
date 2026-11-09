@@ -1,7 +1,11 @@
-"""The kill switch state, stored as JSON in the SSM parameter /cost-kill-switch/state."""
+"""The kill switch state, stored as JSON in the SSM parameter /cost-kill-switch/state.
+
+The month helpers expect `now` to be a timezone-aware UTC datetime.
+"""
 
 import copy
 import json
+import math
 import re
 from datetime import datetime
 
@@ -18,7 +22,7 @@ class StateError(ValueError):
 
 
 def _number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def armed(month: str, acknowledged: float = 0.0) -> dict:
@@ -68,8 +72,10 @@ def validate(doc) -> dict:
         for k, v in conc.items()
     ):
         raise StateError("concurrency must map function names to an int >= 0 or null")
-    if doc["status"] == ARMED and (dists or conc or doc["tripped_at"] or doc["reason"]):
+    if doc["status"] == ARMED and (dists or conc or doc["tripped_at"] or doc["reason"] or doc["estimate_usd"] is not None):
         raise StateError("an armed state carries no trip details")
+    if doc["status"] == TRIPPED and not all(isinstance(doc[k], str) and doc[k] for k in ("reason", "tripped_at")):
+        raise StateError("a tripped state needs a reason and a trip time")
     return doc
 
 

@@ -6,8 +6,13 @@ MAX_REASON = 200
 
 def parse_event(event, trigger_topic_arn: str) -> tuple[str, str | None]:
     if isinstance(event, dict) and "Records" in event:
-        for record in event["Records"]:
-            if record.get("EventSource") == "aws:sns" and record.get("Sns", {}).get("TopicArn") == trigger_topic_arn:
+        records = event["Records"]
+        if not isinstance(records, list):
+            raise ValueError("Records must be a list")
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("Sns"), dict):
+                continue
+            if record.get("EventSource") == "aws:sns" and record["Sns"].get("TopicArn") == trigger_topic_arn:
                 return "trip", "budget"
         return "ignore", None
     action = event.get("action") if isinstance(event, dict) else None
