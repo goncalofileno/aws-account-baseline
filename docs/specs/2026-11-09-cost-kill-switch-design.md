@@ -46,8 +46,8 @@ tested on 2026-11-09 and returns 1-minute CloudFront data with about 4 minutes o
 | Source | Bounded today? | Covered by |
 |---|---|---|
 | CloudFront data transfer and requests | No | Fast trigger (§5.1) |
-| API Gateway, contact Lambda, their logs (also reachable through `execute-api` directly) | Throttle 2/5 and reserved concurrency 2: worst case about USD 8–10 a month | Fast trigger (§5.1) |
-| SES | Turnstile before every send, SES daily quota | Slow trigger (§5.2) |
+| API Gateway, contact Lambda, their logs (also reachable through `execute-api` directly) | Throttle 2/5 and reserved concurrency 2: worst case about USD 8–10 a month | Fast trigger (§5.1) covers the contact Lambda and API Gateway requests, but **not** CloudWatch Logs ingestion; only the budget (slow trigger, §5.2) covers that |
+| SES | Turnstile before every send, SES daily quota | Slow trigger (§5.2) only: the fast trigger doesn't see SES |
 | S3 | Read only by CloudFront through OAC | Fast trigger, through CloudFront |
 | Leaked credentials or unexpected services | No IAM users, scoped OIDC roles, region SCP | Slow trigger (§5.2) |
 | Cloudflare (free plan), GitHub Actions, Pulumi Cloud | No usage-based charges | Not applicable |
@@ -113,7 +113,11 @@ with the date they were checked.
   `acknowledged` to 0 and stores the new month. A tripped state stays tripped.
 - **Read cost:** about 6 metric reads per run, around 260,000 a month, inside the 1 million free
   `GetMetricStatistics` requests. The function logs a warning when one run needs more than 20 reads,
-  because at 1 run a minute that would leave the free tier.
+  because at 1 run a minute that would leave the free tier. After it has decided and saved, a run
+  that made more than 20 reads raises, so the errors alarm emails.
+- **Tripped checks read no metrics:** a `check` on a tripped state goes straight to enforcement
+  (the estimate is reported as unknown). Only `status` and `rearm` read metrics while tripped, and
+  they raise when the read fails.
 
 **Reaction time:** about 4 min metric lag + up to 1 min to the next run + 5–15 min for the disabled
 distribution to propagate, so about 10–20 min in total. A flood of up to 1 Gbps moves under 100 GB
@@ -135,10 +139,14 @@ month. Any SNS record whose `TopicArn` equals `TRIGGER_TOPIC_ARN` trips the swit
 2. For every enabled distribution: add its ID to `disabled_distributions` and save, then
    `GetDistributionConfig`, set `Enabled=false`, `UpdateDistribution` with `IfMatch`.
 3. For every Lambda function except itself: read `GetFunctionConcurrency`, store the previous value
-   in `concurrency` (`null` when none was set) and save, then `PutFunctionConcurrency` 0. That also
-   closes the `execute-api` endpoint.
-4. Then publish the alert, even if a step above failed (that failure is re-raised afterwards), so
-   the one transition email is never lost and an SNS failure never delays the stop.
+   in `concurrency` (`null` when none was set) and save, then `PutFunctionConcurrency` 0. That stops
+   the contact Lambda, but API Gateway still accepts and bills requests at the stage throttle (2 rps,
+   about 5 million a month, about USD 6, failing with 5xx). That is bounded and inside the accepted
+   USD 10.
+4. Then read the estimate (best effort, for a manual or budget trip; a threshold trip already has
+   it), save it into the state's `estimate_usd`, and publish the alert, even if a step above failed
+   (that failure is re-raised afterwards), so the one transition email is never lost and neither an
+   SNS failure nor a metric read ever delays the stop.
 
 Each entry is recorded before its resource changes, so a crash never leaves a change without a
 record. Already-recorded entries are never overwritten: the original value is the one to restore.
@@ -247,16 +255,18 @@ the errors alarm fires. It is never treated as armed.
 
 ## 9. Testing and checks
 
-- **Python (`functions/cost_kill_switch/tests/`, pytest, botocore `Stubber`, no network, no new
-  runtime dependencies):**
-  - **Pure functions, table-driven:** the estimate from metric sums; `decide(state, estimate, event,
-    now)`, which returns the actions to take; month rollover; the trip rule at the boundary (just
-    under or exactly at USD 5 after `acknowledged`); the state schema validation.
-  - **The action layer with stubs:** a trip disables enabled distributions only and records them;
-    concurrency is recorded once and never overwritten; while tripped, enforcement catches a
-    re-enabled distribution; a rearm restores exactly the recorded values (`Delete…` for `null`); the
-    email is sent only on a transition; an SNS record from another topic is ignored; it never
-    touches its own concurrency.
+- **Python (`functions/cost_kill_switch/tests/`, pytest, no network, no new runtime dependencies):**
+  - **Pure modules, table-driven:** `pricing` (the estimate from metric sums, the trip rule at the
+    boundary), `state` (month rollover, the schema validation) and `events` (which records are
+    ignored, tripped or rearmed).
+  - **The flow (`handler.KillSwitch.run`) against in-memory fakes of the boto3 clients:** a trip
+    disables enabled distributions only and records them; concurrency is recorded once and never
+    overwritten; while tripped, enforcement catches a re-enabled distribution without reading
+    metrics; a rearm restores exactly the recorded values (`Delete…` for `null`); the email is sent
+    only on a transition; an SNS record from another topic is ignored; it never touches its own
+    concurrency.
+  - **Contract tests:** the boto3 call shapes are checked with botocore `Stubber` against the
+    service models.
 - **Terraform (`tests/cost_kill_switch.tftest.hcl`):**
   - the IAM statements, as exact maps, in the existing style;
   - the topic policy conditions;

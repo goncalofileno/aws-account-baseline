@@ -156,7 +156,7 @@ resource "aws_scheduler_schedule" "kill_switch_check" {
     input    = jsonencode({ action = "check" })
 
     retry_policy {
-      maximum_retry_attempts       = 0 # the next minute is the retry
+      maximum_retry_attempts       = 0 # the next minute is the retry (the Lambda's own 2 async retries still apply, which is fine)
       maximum_event_age_in_seconds = 60
     }
   }
