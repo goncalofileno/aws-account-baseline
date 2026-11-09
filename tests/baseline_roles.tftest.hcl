@@ -65,7 +65,8 @@ run "baseline_plan_only_writes_the_lock_file" {
   assert {
     condition = [for s in jsondecode(module.baseline_plan.policy).Statement : s.Sid] == [
       "StateList", "StateRead", "StateLock", "IamRead", "CloudTrailRead", "BudgetsRead", "TrailBucketConfigRead",
-      "AnomalyDetectionRead",
+      "AnomalyDetectionRead", "KillSwitchFunctionRead", "KillSwitchTopicsRead", "KillSwitchScheduleRead",
+      "KillSwitchStateRead", "KillSwitchAlarmsRead", "KillSwitchLogsRead", "KillSwitchDescribe",
     ]
     error_message = "baseline-plan policy must declare exactly these statements, in this order."
   }
@@ -101,6 +102,16 @@ run "baseline_plan_only_writes_the_lock_file" {
         Action   = ["ce:GetAnomalyMonitors", "ce:GetAnomalySubscriptions", "ce:ListTagsForResource"]
         Resource = ["arn:aws:ce::123456789012:anomalymonitor/*", "arn:aws:ce::123456789012:anomalysubscription/*"]
       }
+      KillSwitchFunctionRead = { Effect = "Allow", Action = ["lambda:Get*", "lambda:List*"], Resource = ["arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch"] }
+      KillSwitchTopicsRead   = { Effect = "Allow", Action = ["sns:Get*", "sns:List*"], Resource = ["arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-*"] }
+      KillSwitchScheduleRead = { Effect = "Allow", Action = ["scheduler:GetSchedule"], Resource = ["arn:aws:scheduler:eu-north-1:123456789012:schedule/default/cost-kill-switch-*"] }
+      KillSwitchStateRead    = { Effect = "Allow", Action = ["ssm:GetParameter", "ssm:ListTagsForResource"], Resource = ["arn:aws:ssm:eu-north-1:123456789012:parameter/cost-kill-switch/state"] }
+      KillSwitchAlarmsRead   = { Effect = "Allow", Action = ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"], Resource = ["arn:aws:cloudwatch:eu-north-1:123456789012:alarm:cost-kill-switch-*"] }
+      KillSwitchLogsRead = {
+        Effect   = "Allow", Action = ["logs:ListTagsForResource", "logs:ListTagsLogGroup"]
+        Resource = ["arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch", "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch:*"]
+      }
+      KillSwitchDescribe = { Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = ["*"] }
     }
     error_message = "baseline-plan policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }
@@ -126,7 +137,8 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
     condition = [for s in jsondecode(module.baseline_apply.policy).Statement : s.Sid] == [
       "StateList", "StateReadWrite", "StateLock", "IamRead", "GithubOidcProvider", "ManagedIam",
       "CloudTrailManage", "CloudTrailRead", "Budgets", "TrailBucket", "AnomalyDetectionCreate",
-      "AnomalyDetection",
+      "AnomalyDetection", "KillSwitchFunction", "KillSwitchTopics", "KillSwitchSchedule", "KillSwitchState",
+      "KillSwitchAlarms", "KillSwitchLogs", "KillSwitchDescribe",
     ]
     error_message = "baseline-apply policy must declare exactly these statements, in this order."
   }
@@ -177,6 +189,20 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
         ]
         Resource = ["arn:aws:ce::123456789012:anomalymonitor/*", "arn:aws:ce::123456789012:anomalysubscription/*"]
       }
+      KillSwitchFunction = { Effect = "Allow", Action = ["lambda:*"], Resource = ["arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch"] }
+      KillSwitchTopics   = { Effect = "Allow", Action = ["sns:*"], Resource = ["arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-*"] }
+      KillSwitchSchedule = { Effect = "Allow", Action = ["scheduler:*"], Resource = ["arn:aws:scheduler:eu-north-1:123456789012:schedule/default/cost-kill-switch-*"] }
+      KillSwitchState    = { Effect = "Allow", Action = ["ssm:*"], Resource = ["arn:aws:ssm:eu-north-1:123456789012:parameter/cost-kill-switch/state"] }
+      KillSwitchAlarms = {
+        Effect   = "Allow"
+        Action   = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"]
+        Resource = ["arn:aws:cloudwatch:eu-north-1:123456789012:alarm:cost-kill-switch-*"]
+      }
+      KillSwitchLogs = {
+        Effect   = "Allow", Action = ["logs:*"]
+        Resource = ["arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch", "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch:*"]
+      }
+      KillSwitchDescribe = { Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = ["*"] }
     }
     error_message = "baseline-apply policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }

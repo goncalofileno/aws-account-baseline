@@ -156,6 +156,9 @@ locals {
       # Read-only: lets the deploy workflow mask the organization and management account IDs
       # before any step can print them (an SCP denial message quotes the SCP's ARN, which holds both).
       { Sid = "DescribeOrganization", Effect = "Allow", Action = ["organizations:DescribeOrganization"], Resource = "*" },
+      # Read-only: the deploy workflow refuses to deploy while the cost kill switch is tripped
+      # (kill-switch.tf). The role can read the state but never change it.
+      { Sid = "KillSwitchState", Effect = "Allow", Action = ["ssm:GetParameter"], Resource = local.kill_switch_parameter_arn },
       {
         Sid       = "CreateRolesOnlyWithBoundary"
         Effect    = "Allow"
