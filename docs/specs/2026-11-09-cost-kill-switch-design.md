@@ -131,17 +131,21 @@ month. Any SNS record whose `TopicArn` equals `TRIGGER_TOPIC_ARN` trips the swit
 ### 5.3 Trip
 
 1. Write the state first: `status=tripped`, `reason`, `tripped_at`, `estimate_usd`, with the lists
-   below still empty. Then publish the alert.
-2. For every enabled distribution: `GetDistributionConfig`, set `Enabled=false`,
-   `UpdateDistribution` with `IfMatch`. Add its ID to `disabled_distributions`.
+   below still empty.
+2. For every enabled distribution: add its ID to `disabled_distributions` and save, then
+   `GetDistributionConfig`, set `Enabled=false`, `UpdateDistribution` with `IfMatch`.
 3. For every Lambda function except itself: read `GetFunctionConcurrency`, store the previous value
-   in `concurrency` (`null` when none was set), then `PutFunctionConcurrency` 0. That also closes
-   the `execute-api` endpoint.
-4. Save the state after each step, so a crash loses at most one entry. Already-recorded entries are
-   never overwritten: the original value is the one to restore.
+   in `concurrency` (`null` when none was set) and save, then `PutFunctionConcurrency` 0. That also
+   closes the `execute-api` endpoint.
+4. Then publish the alert, even if a step above failed (that failure is re-raised afterwards), so
+   the one transition email is never lost and an SNS failure never delays the stop.
 
-**While tripped**, every `check` repeats steps 2–3. It disables anything that came back, for example
-a new distribution or a deploy that slipped through, and records it. The alert email goes out only
+Each entry is recorded before its resource changes, so a crash never leaves a change without a
+record. Already-recorded entries are never overwritten: the original value is the one to restore.
+
+**While tripped**, every `check` repeats steps 2–3, even when the metrics can't be read (the
+estimate is then reported as unknown). It disables anything that came back, for example a new
+distribution or a deploy that slipped through, and records it. The alert email goes out only
 on the transition `armed → tripped`. A trip while already tripped is a no-op apart from enforcement.
 
 ### 5.4 Rearm
@@ -182,11 +186,17 @@ the errors alarm fires. It is never treated as armed.
 
 ## 6. Failure handling
 
-- **Fail open on reads, loudly.** If metrics or listings can't be read, the run raises and doesn't
-  trip. The errors alarm emails after 5 failing minutes. Tripping blind would take the site down on
+- **Fail open on reads, loudly.** If metrics or listings can't be read while armed, a `check` raises
+  and doesn't trip (`status` and `rearm` raise too). A manual or budget trip, and enforcement while
+  tripped, never depend on the metrics. The errors alarm emails after 5 failing minutes. Tripping blind would take the site down on
   an AWS hiccup.
 - **Actions retry by repetition.** A failed `UpdateDistribution` (an ETag race, for example) or a
   failed concurrency change is retried on the next `check`, because the state is already `tripped`.
+- **Errors leave the function sanitised.** A synchronous caller (the workflow) only ever sees
+  `kill switch failed: <AWS error code or exception class>`; the full error, which can quote ARNs,
+  stays in the function's logs.
+- **Short client timeouts** (connect 5 s, read 10 s, standard retries) keep one hung call from
+  using up the 60 s timeout.
 - **Heartbeat.** If the schedule stops or the function is broken, the heartbeat alarm emails within
   10 minutes.
 - **The alarms are in `eu-north-1`.** The SCP denies CloudWatch writes only in `us-east-1`. There
