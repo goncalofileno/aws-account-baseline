@@ -1,0 +1,3 @@
+# Test-only dependencies. The Lambda itself uses only the runtime's boto3.
+pytest
+boto3

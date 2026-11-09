@@ -22,3 +22,8 @@ output "cloudtrail_bucket" {
   description = "S3 bucket receiving CloudTrail logs."
   value       = module.cloudtrail_bucket.name
 }
+
+output "kill_switch_operator_role_arn" {
+  description = "Set as AWS_ROLE_KILL_SWITCH in this repo's GitHub secrets (public repo: an ARN embeds the account ID)."
+  value       = module.kill_switch_operator.arn
+}

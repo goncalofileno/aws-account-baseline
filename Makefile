@@ -1,7 +1,7 @@
 TF   ?= terraform
 DIRS ?= . bootstrap
 
-.PHONY: fmt fmt-check init validate lint security test check
+.PHONY: fmt fmt-check init validate lint security test pytest check
 
 fmt:
 	$(TF) fmt -recursive
@@ -22,6 +22,7 @@ fmt-check:
 # Checks use their own data dir, so a working copy that was initialised against the real S3
 # backend (after a local apply) doesn't make `init -backend=false` try to reach AWS.
 CHECKS_DATA_DIR ?= .terraform-checks
+KILL_SWITCH_DIR := functions/cost_kill_switch
 
 define tf_each
 	@for d in $(DIRS); do \
@@ -57,4 +58,7 @@ security:
 test:
 	$(call tf_each,test)
 
-check: fmt-check validate lint security test
+pytest:
+	PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.13 --with-requirements $(KILL_SWITCH_DIR)/requirements-dev.txt -- python -m pytest -p no:cacheprovider $(KILL_SWITCH_DIR)
+
+check: fmt-check validate lint security test pytest

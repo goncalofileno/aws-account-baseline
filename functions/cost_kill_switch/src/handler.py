@@ -1,0 +1,315 @@
+"""Cost kill switch: estimates this month's AWS spend and takes the site offline above a threshold.
+
+Design: docs/specs/2026-11-09-cost-kill-switch-design.md. Read failures raise (fail open, the errors
+alarm emails); the state is written before any resource is changed.
+"""
+
+import copy
+import json
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
+
+import state as st
+from events import parse_event
+from pricing import Usage, estimate_usd, over_threshold
+
+LOG = logging.getLogger()
+LOG.setLevel(logging.INFO)
+
+READS_WARNING = 20  # at one run a minute, more than this per run leaves the 1M free reads a month
+REARM_HINT = "Rearm: GitHub, aws-account-baseline, Actions, kill-switch workflow, action rearm."
+
+
+def _code(error: ClientError) -> str:
+    return error.response.get("Error", {}).get("Code", "")
+
+
+def _usd(value) -> str:
+    return "unknown" if value is None else f"USD {value:.2f}"
+
+
+def summary(s: dict, estimate: float | None) -> dict:
+    """What callers see: counts, never resource IDs."""
+    return {
+        "status": s["status"],
+        "reason": s["reason"],
+        "tripped_at": s["tripped_at"],
+        "estimate_usd": None if estimate is None else round(estimate, 4),
+        "acknowledged_usd": s["acknowledged_usd"],
+        "distributions": len(s["disabled_distributions"]),
+        "functions": len(s["concurrency"]),
+    }
+
+
+class KillSwitch:
+    def __init__(self, clients, *, self_name, state_parameter, alerts_topic_arn, trigger_topic_arn, threshold_usd):
+        self.c = clients
+        self.self_name = self_name
+        self.state_parameter = state_parameter
+        self.alerts_topic_arn = alerts_topic_arn
+        self.trigger_topic_arn = trigger_topic_arn
+        self.threshold_usd = float(threshold_usd)
+        self.reads = 0
+
+    # --- state and alerts
+
+    def load_state(self) -> dict:
+        return st.parse(self.c["ssm"].get_parameter(Name=self.state_parameter)["Parameter"]["Value"])
+
+    def put_state_text(self, text: str) -> None:
+        self.c["ssm"].put_parameter(Name=self.state_parameter, Value=text, Type="String", Overwrite=True)
+
+    def save_state(self, s: dict) -> None:
+        self.put_state_text(st.dump(s))
+
+    def alert(self, subject: str, message: str) -> None:
+        self.c["sns"].publish(TopicArn=self.alerts_topic_arn, Subject=subject[:100], Message=message)
+
+    # --- inventory
+
+    def distributions(self) -> list[dict]:
+        out = []
+        for page in self.c["cloudfront"].get_paginator("list_distributions").paginate():
+            out += [{"Id": d["Id"], "Enabled": d["Enabled"]} for d in page["DistributionList"].get("Items", [])]
+        return out
+
+    def functions(self) -> list[dict]:
+        out = []
+        for page in self.c["lambda"].get_paginator("list_functions").paginate():
+            out += [
+                {"FunctionName": f["FunctionName"], "MemorySize": f["MemorySize"]}
+                for f in page["Functions"]
+                if f["FunctionName"] != self.self_name
+            ]
+        return out
+
+    def api_ids(self) -> list[str]:
+        out = []
+        for page in self.c["apigatewayv2"].get_paginator("get_apis").paginate():
+            out += [a["ApiId"] for a in page.get("Items", [])]
+        return out
+
+    # --- metrics
+
+    def metric_sum(self, client_key, namespace, metric, dimensions, start, end) -> float:
+        self.reads += 1
+        response = self.c[client_key].get_metric_statistics(
+            Namespace=namespace,
+            MetricName=metric,
+            Dimensions=dimensions,
+            StartTime=start,
+            EndTime=end,
+            Period=3600,
+            Statistics=["Sum"],
+        )
+        return sum(p["Sum"] for p in response["Datapoints"])
+
+    def usage(self, now: datetime) -> Usage:
+        self.reads = 0
+        start, end = st.month_start(now), now + timedelta(minutes=1)
+        cf_bytes = cf_requests = api_requests = invocations = gb_seconds = 0.0
+        for d in self.distributions():
+            dims = [{"Name": "DistributionId", "Value": d["Id"]}, {"Name": "Region", "Value": "Global"}]
+            for metric in ("BytesDownloaded", "BytesUploaded"):
+                cf_bytes += self.metric_sum("cloudwatch_us_east_1", "AWS/CloudFront", metric, dims, start, end)
+            cf_requests += self.metric_sum("cloudwatch_us_east_1", "AWS/CloudFront", "Requests", dims, start, end)
+        for api_id in self.api_ids():
+            dims = [{"Name": "ApiId", "Value": api_id}]
+            api_requests += self.metric_sum("cloudwatch", "AWS/ApiGateway", "Count", dims, start, end)
+        for f in self.functions():
+            dims = [{"Name": "FunctionName", "Value": f["FunctionName"]}]
+            invocations += self.metric_sum("cloudwatch", "AWS/Lambda", "Invocations", dims, start, end)
+            duration_ms = self.metric_sum("cloudwatch", "AWS/Lambda", "Duration", dims, start, end)
+            gb_seconds += duration_ms / 1000 * f["MemorySize"] / 1024
+        if self.reads > READS_WARNING:
+            LOG.warning("%d metric reads in one run: above the free tier at one run a minute", self.reads)
+        return Usage(cf_bytes, cf_requests, api_requests, invocations, gb_seconds)
+
+    # --- actions
+
+    def set_distribution_enabled(self, dist_id: str, enabled: bool) -> None:
+        cf = self.c["cloudfront"]
+        response = cf.get_distribution_config(Id=dist_id)
+        config = response["DistributionConfig"]
+        if config["Enabled"] == enabled:
+            return
+        config["Enabled"] = enabled
+        cf.update_distribution(Id=dist_id, IfMatch=response["ETag"], DistributionConfig=config)
+
+    def reserved_concurrency(self, name: str) -> int | None:
+        return self.c["lambda"].get_function_concurrency(FunctionName=name).get("ReservedConcurrentExecutions")
+
+    def set_reserved_concurrency(self, name: str, value: int | None) -> None:
+        if value is None:
+            self.c["lambda"].delete_function_concurrency(FunctionName=name)
+        else:
+            self.c["lambda"].put_function_concurrency(FunctionName=name, ReservedConcurrentExecutions=value)
+
+    def enforce(self, s: dict) -> dict:
+        """Disable every enabled distribution and zero every other function, recording first."""
+        s = copy.deepcopy(s)
+        failures = 0
+        for d in self.distributions():
+            if not d["Enabled"]:
+                continue
+            if d["Id"] not in s["disabled_distributions"]:
+                s["disabled_distributions"].append(d["Id"])
+                self.save_state(s)
+            try:
+                self.set_distribution_enabled(d["Id"], False)
+            except (ClientError, BotoCoreError):
+                LOG.exception("could not disable a distribution")
+                failures += 1
+        for f in self.functions():
+            name = f["FunctionName"]
+            try:
+                current = self.reserved_concurrency(name)
+                if current == 0:
+                    continue
+                if name not in s["concurrency"]:
+                    s["concurrency"][name] = current
+                    self.save_state(s)
+                self.set_reserved_concurrency(name, 0)
+            except (ClientError, BotoCoreError):
+                LOG.exception("could not zero a function's concurrency")
+                failures += 1
+        if failures:
+            raise RuntimeError(f"{failures} enforcement action(s) failed; the next run retries")
+        return s
+
+    def rearm(self, s: dict, estimate: float, reason: str, now: datetime) -> dict:
+        for dist_id in s["disabled_distributions"]:
+            try:
+                self.set_distribution_enabled(dist_id, True)
+            except ClientError as e:
+                if _code(e) != "NoSuchDistribution":
+                    raise
+                LOG.warning("a recorded distribution no longer exists")
+        for name, previous in s["concurrency"].items():
+            try:
+                self.set_reserved_concurrency(name, previous)
+            except ClientError as e:
+                if _code(e) != "ResourceNotFoundException":
+                    raise
+                LOG.warning("a recorded function no longer exists")
+        new = st.armed(st.month_of(now), acknowledged=estimate)
+        self.save_state(new)
+        self.alert(
+            "Cost kill switch rearmed",
+            f"Reason: {reason}\nRestored {len(s['disabled_distributions'])} distribution(s) and "
+            f"{len(s['concurrency'])} function(s).\nSpend so far this month ({_usd(estimate)}) is acknowledged; "
+            f"the switch trips again after another USD {self.threshold_usd:g}.",
+        )
+        return new
+
+    # --- flow
+
+    def _estimate_or_none(self, now: datetime) -> float | None:
+        try:
+            return estimate_usd(self.usage(now))
+        except (ClientError, BotoCoreError):
+            LOG.exception("could not read metrics; tripping without an estimate")
+            return None
+
+    def run(self, event, now: datetime) -> dict:
+        action, reason = parse_event(event, self.trigger_topic_arn)
+        if action == "ignore":
+            LOG.info(json.dumps({"action": "ignore"}))
+            return {"status": "ignored"}
+        enforced = False
+        self.reads = 0
+        loaded = self.load_state()
+        s = st.roll_month(loaded, now)
+        if s is not loaded:
+            self.save_state(s)
+        # Enforcement never waits on metric reads: a tripped check reads none, and a trip reads its
+        # estimate only after enforcing. Everything else fails open when they can't be read.
+        estimate = None
+        if action == "check" and s["status"] == st.TRIPPED:
+            pass
+        elif action != "trip":
+            estimate = estimate_usd(self.usage(now))
+        if action == "check" and s["status"] == st.ARMED and over_threshold(estimate, s["acknowledged_usd"], self.threshold_usd):
+            action = "trip"
+            reason = (
+                f"estimated spend USD {estimate - s['acknowledged_usd']:.2f} this month "
+                f"is over the USD {self.threshold_usd:g} threshold"
+            )
+        if action == "rearm" and s["status"] == st.TRIPPED:
+            s = self.rearm(s, estimate, reason, now)
+        elif action == "trip" and s["status"] == st.ARMED:
+            s = st.tripped(s, reason=reason, now=now, estimate=estimate)
+            self.save_state(s)
+            # Enforce first (no metric read before it), then the best-effort estimate (email and summary
+            # only, never saved), then the alert: nothing that can fail sits between enforcement and
+            # the alert, and a failed enforcement can't swallow it; the error is raised afterwards.
+            enforce_error = None
+            try:
+                s = self.enforce(s)
+            except Exception as e:  # noqa: BLE001
+                LOG.exception("enforcement failed during the trip")
+                enforce_error = e
+            enforced = True
+            if estimate is None:
+                estimate = self._estimate_or_none(now)  # for the email and the summary only, never saved
+            self.alert(
+                "Cost kill switch TRIPPED",
+                f"Reason: {reason}\nTime: {s['tripped_at']}\nEstimated spend this month: {_usd(estimate)}\n"
+                "The site is going offline: every CloudFront distribution is being disabled and every other "
+                f"Lambda function's reserved concurrency set to 0.\n{REARM_HINT}",
+            )
+            if enforce_error is not None:
+                raise enforce_error
+        if s["status"] == st.TRIPPED and action != "status" and not enforced:
+            s = self.enforce(s)
+        result = summary(s, estimate)
+        LOG.info(json.dumps({"action": action, **result}))
+        if self.reads > READS_WARNING:
+            # After everything was decided and saved, so the errors alarm emails without delaying a stop.
+            raise RuntimeError(
+                f"{self.reads} metric reads in one run: over the free tier at one run a minute; "
+                "reduce resources or raise the cap"
+            )
+        return result
+
+
+def make_clients() -> dict:
+    config = Config(connect_timeout=5, read_timeout=10, retries={"mode": "standard", "max_attempts": 3})
+    return {
+        "cloudwatch_us_east_1": boto3.client("cloudwatch", region_name="us-east-1", config=config),  # CloudFront metrics
+        "cloudwatch": boto3.client("cloudwatch", config=config),
+        "cloudfront": boto3.client("cloudfront", config=config),
+        "lambda": boto3.client("lambda", config=config),
+        "apigatewayv2": boto3.client("apigatewayv2", config=config),
+        "ssm": boto3.client("ssm", config=config),
+        "sns": boto3.client("sns", config=config),
+    }
+
+
+_SWITCH = None
+
+
+def lambda_handler(event, context):
+    global _SWITCH
+    try:
+        if _SWITCH is None:
+            _SWITCH = KillSwitch(
+                make_clients(),
+                self_name=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
+                state_parameter=os.environ["STATE_PARAMETER"],
+                alerts_topic_arn=os.environ["ALERTS_TOPIC_ARN"],
+                trigger_topic_arn=os.environ["TRIGGER_TOPIC_ARN"],
+                threshold_usd=float(os.environ["THRESHOLD_USD"]),
+            )
+        return _SWITCH.run(event, datetime.now(timezone.utc))
+    except Exception as e:
+        # Full detail stays in CloudWatch Logs; a synchronous caller only gets a code, never AWS text
+        # (which can carry account and resource ARNs).
+        LOG.exception("kill switch run failed")
+        code = e.response.get("Error", {}).get("Code", "ClientError") if isinstance(e, ClientError) else type(e).__name__
+        raise RuntimeError(f"kill switch failed: {code}") from None

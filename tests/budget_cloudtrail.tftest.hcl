@@ -1,4 +1,23 @@
 mock_provider "aws" {
+  # Valid ARNs for resources whose ARN feeds an ARN-validated argument (kill-switch.tf, budget.tf).
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/mock"
+    }
+  }
+
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:eu-north-1:123456789012:mock"
+    }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:eu-north-1:123456789012:function:mock"
+    }
+  }
+
   mock_data "aws_caller_identity" {
     defaults = {
       account_id = "123456789012"
@@ -29,8 +48,8 @@ run "budget_caps_spend_at_five_dollars" {
   }
 
   assert {
-    condition     = length(aws_budgets_budget.monthly_cost.notification) == 2
-    error_message = "Budget must have exactly two notifications."
+    condition     = length(aws_budgets_budget.monthly_cost.notification) == 4
+    error_message = "Budget must have exactly four notifications (two emails, two kill switch triggers)."
   }
 
   assert {

@@ -10,3 +10,5 @@ plan-summary.md
 .DS_Store
 *.terraform.lock.hcl.orig
 .terraform-checks/
+.build/
+__pycache__/

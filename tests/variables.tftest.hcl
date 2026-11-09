@@ -1,4 +1,23 @@
 mock_provider "aws" {
+  # Valid ARNs for resources whose ARN feeds an ARN-validated argument (kill-switch.tf, budget.tf).
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/mock"
+    }
+  }
+
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:eu-north-1:123456789012:mock"
+    }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:eu-north-1:123456789012:function:mock"
+    }
+  }
+
   # The subscription validates monitor_arn_list as ARNs; OpenTofu's plan rejects a random mock string.
   mock_resource "aws_ce_anomaly_monitor" {
     defaults = {
