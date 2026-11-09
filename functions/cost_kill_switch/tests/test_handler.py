@@ -401,8 +401,8 @@ def test_a_manual_trip_enforces_before_reading_any_metric():
     result = w.switch.run({"action": "trip", "reason": "drill"}, NOW)
     assert seen and not any(seen)  # every read happened after the distribution was disabled
     assert result["estimate_usd"] == pytest.approx(0.12)
-    assert w.ssm.state["estimate_usd"] == pytest.approx(0.12)
-    assert w.ssm.writes[0]["estimate_usd"] is None  # the first write is the bare trip
+    assert w.ssm.state["estimate_usd"] is None  # the late estimate is never persisted
+    assert all(write["estimate_usd"] is None for write in w.ssm.writes)
     assert "USD 0.12" in w.sns.published[0][1]
     assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
 
@@ -443,3 +443,27 @@ def test_the_read_cap_error_leaves_the_lambda_sanitised(monkeypatch):
     with pytest.raises(RuntimeError) as info:
         handler.lambda_handler({"action": "check"}, None)
     assert str(info.value) == "kill switch failed: RuntimeError"
+
+
+def test_a_partial_enforcement_failure_keeps_its_records_and_rearm_restores_them():
+    w = World(dists={"E1": True, "E2": True}, cf_sums=QUIET)
+    ok = w.cloudfront.update_distribution
+    fail = True
+
+    def flaky(Id, IfMatch, DistributionConfig):
+        if Id == "E2" and fail:
+            raise client_error_("UpdateDistribution")
+        ok(Id, IfMatch, DistributionConfig)
+
+    w.cloudfront.update_distribution = flaky
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    s = w.ssm.state
+    assert s["disabled_distributions"] == ["E1", "E2"]
+    assert s["concurrency"] == {"cv-site-contact": 2}
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    assert "USD 0.12" in w.sns.published[0][1]
+    fail = False
+    w.switch.run({"action": "rearm", "reason": "test"}, NOW)
+    assert w.cloudfront.enabled == {"E1": True, "E2": True}
+    assert w.lambda_.reserved["cv-site-contact"] == 2

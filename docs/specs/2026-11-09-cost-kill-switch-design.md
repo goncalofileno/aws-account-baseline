@@ -144,7 +144,7 @@ month. Any SNS record whose `TopicArn` equals `TRIGGER_TOPIC_ARN` trips the swit
    about 5 million a month, about USD 6, failing with 5xx). That is bounded and inside the accepted
    USD 10.
 4. Then read the estimate (best effort, for a manual or budget trip; a threshold trip already has
-   it), save it into the state's `estimate_usd`, and publish the alert, even if a step above failed
+   it), use it only in the alert email and the returned summary (the stored `estimate_usd` stays as written at trip time, `null` for these trips, so no write that could fail or overwrite the records sits between enforcement and the alert), and publish the alert, even if a step above failed
    (that failure is re-raised afterwards), so the one transition email is never lost and neither an
    SNS failure nor a metric read ever delays the stop.
 

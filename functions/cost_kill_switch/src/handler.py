@@ -245,9 +245,9 @@ class KillSwitch:
         elif action == "trip" and s["status"] == st.ARMED:
             s = st.tripped(s, reason=reason, now=now, estimate=estimate)
             self.save_state(s)
-            # Enforce first (no metric read before it), then the best-effort estimate, then the alert,
-            # so a failed alert or read can't delay the shutdown and a failed enforcement can't
-            # swallow the alert; the enforcement error is raised afterwards.
+            # Enforce first (no metric read before it), then the best-effort estimate (email and summary
+            # only, never saved), then the alert: nothing that can fail sits between enforcement and
+            # the alert, and a failed enforcement can't swallow it; the error is raised afterwards.
             enforce_error = None
             try:
                 s = self.enforce(s)
@@ -256,10 +256,7 @@ class KillSwitch:
                 enforce_error = e
             enforced = True
             if estimate is None:
-                estimate = self._estimate_or_none(now)
-                if estimate is not None:
-                    s = {**s, "estimate_usd": round(estimate, 4)}
-                    self.save_state(s)
+                estimate = self._estimate_or_none(now)  # for the email and the summary only, never saved
             self.alert(
                 "Cost kill switch TRIPPED",
                 f"Reason: {reason}\nTime: {s['tripped_at']}\nEstimated spend this month: {_usd(estimate)}\n"
