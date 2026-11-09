@@ -96,9 +96,8 @@ run "the_function_is_configured_as_designed" {
       Effect    = "Allow"
       Principal = { Service = "lambda.amazonaws.com" }
       Action    = "sts:AssumeRole"
-      Condition = { StringEquals = { "aws:SourceAccount" = "123456789012" } }
     }]
-    error_message = "Only Lambda in this account may assume the kill switch role."
+    error_message = "Only the Lambda service may assume the kill switch role (no aws:SourceAccount: Lambda execution roles don't take it)."
   }
 }
 
@@ -144,7 +143,8 @@ run "the_schedule_checks_every_minute" {
       aws_scheduler_schedule.kill_switch_check.target[0].arn == "arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch" &&
       aws_scheduler_schedule.kill_switch_check.target[0].role_arn == "arn:aws:iam::123456789012:role/baseline-kill-switch-scheduler" &&
       jsondecode(aws_scheduler_schedule.kill_switch_check.target[0].input) == { action = "check" } &&
-      aws_scheduler_schedule.kill_switch_check.target[0].retry_policy[0].maximum_retry_attempts == 0
+      aws_scheduler_schedule.kill_switch_check.target[0].retry_policy[0].maximum_retry_attempts == 0 &&
+      aws_scheduler_schedule.kill_switch_check.target[0].retry_policy[0].maximum_event_age_in_seconds == 60
     )
     error_message = "cost-kill-switch-check: rate(1 minute), no flexible window, input {\"action\":\"check\"}, no retries."
   }
@@ -152,7 +152,12 @@ run "the_schedule_checks_every_minute" {
   assert {
     condition = (
       aws_iam_role.kill_switch_scheduler.name == "baseline-kill-switch-scheduler" &&
-      jsondecode(aws_iam_role.kill_switch_scheduler.assume_role_policy).Statement[0].Principal == { Service = "scheduler.amazonaws.com" } &&
+      jsondecode(aws_iam_role.kill_switch_scheduler.assume_role_policy).Statement == [{
+        Effect    = "Allow"
+        Principal = { Service = "scheduler.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+        Condition = { StringEquals = { "aws:SourceAccount" = "123456789012" } }
+      }] &&
       jsondecode(aws_iam_role_policy.kill_switch_scheduler.policy).Statement == [{
         Sid = "InvokeKillSwitch", Effect = "Allow", Action = "lambda:InvokeFunction", Resource = "arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch"
       }]
@@ -200,6 +205,8 @@ run "the_topics_are_wired_as_designed" {
       aws_sns_topic_subscription.kill_switch_trigger.topic_arn == "arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-trigger" &&
       aws_sns_topic_subscription.kill_switch_trigger.endpoint == "arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch" &&
       aws_lambda_permission.kill_switch_trigger.principal == "sns.amazonaws.com" &&
+      aws_lambda_permission.kill_switch_trigger.action == "lambda:InvokeFunction" &&
+      aws_lambda_permission.kill_switch_trigger.function_name == "cost-kill-switch" &&
       aws_lambda_permission.kill_switch_trigger.source_arn == "arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-trigger"
     )
     error_message = "The trigger topic invokes the function, and only that topic may."

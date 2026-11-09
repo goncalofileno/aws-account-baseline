@@ -27,6 +27,8 @@ data "archive_file" "kill_switch" {
   source_dir  = "${path.module}/functions/cost_kill_switch/src"
   excludes    = ["**/__pycache__/**"]
   output_path = "${path.module}/.build/cost-kill-switch.zip"
+  # Fixed modes so source_code_hash doesn't depend on the local umask.
+  output_file_mode = "0644"
 }
 
 resource "aws_cloudwatch_log_group" "kill_switch" {
@@ -45,7 +47,7 @@ resource "aws_iam_role" "kill_switch" {
       Effect    = "Allow"
       Principal = { Service = "lambda.amazonaws.com" }
       Action    = "sts:AssumeRole"
-      Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
+      # No aws:SourceAccount: Lambda execution roles don't take it; only Lambda in this account can use the role (iam:PassRole).
     }]
   })
 }
