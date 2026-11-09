@@ -47,15 +47,21 @@ jobs:
           ACTION: ${{ inputs.action }}
           REASON: ${{ inputs.reason }}
         run: |
+          if [ "$ACTION" != "status" ] && [ -z "$(printf '%s' "$REASON" | tr -d '[:space:]')" ]; then
+            echo "::error::trip and rearm need a reason"
+            exit 1
+          fi
           payload=$(jq -cn --arg a "$ACTION" --arg r "$REASON" \
             'if $a == "status" then {action: $a} else {action: $a, reason: $r} end')
           aws lambda invoke --function-name cost-kill-switch --cli-binary-format raw-in-base64-out \
             --payload "$payload" response.json > meta.json
-          # Only the error type: messages can quote ARNs. Details are in the function's logs.
+          # The Lambda's message is code-only by design; anything else is withheld.
           if jq -e '.FunctionError' meta.json > /dev/null; then
-            echo "::error::the kill switch failed: $(jq -r '.errorType // "unknown"' response.json)"
+            msg=$(jq -r '(.errorMessage // "") | if test("^kill switch failed: [A-Za-z0-9_.]+$") then . else "kill switch failed: unknown" end' response.json 2>/dev/null || echo "kill switch failed: unknown")
+            echo "::error::$msg (details in the function's logs)"
             exit 1
           fi
+          jq -e 'type == "object" and has("status")' response.json > /dev/null 2>&1 || { echo "::error::unexpected response from the kill switch"; exit 1; }
           {
             echo '### Cost kill switch'
             echo
