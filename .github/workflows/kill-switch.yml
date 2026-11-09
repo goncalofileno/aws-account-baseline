@@ -1,0 +1,65 @@
+name: kill-switch
+
+# Status, trip or rearm the cost kill switch (docs/specs/2026-11-09-cost-kill-switch-design.md).
+# The kill-switch environment requires the owner's approval; its role may only invoke the function.
+on:
+  # checkov:skip=CKV_GHA_7:The inputs only choose the kill switch action and its reason; nothing is built
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        options: [status, trip, rearm]
+        default: status
+      reason:
+        description: Why (required for trip and rearm, up to 200 characters)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: kill-switch
+  cancel-in-progress: false
+
+jobs:
+  invoke:
+    name: ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    environment: kill-switch
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_KILL_SWITCH }}
+          aws-region: eu-north-1
+          mask-aws-account-id: true
+      - name: invoke
+        env:
+          ACTION: ${{ inputs.action }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          payload=$(jq -cn --arg a "$ACTION" --arg r "$REASON" \
+            'if $a == "status" then {action: $a} else {action: $a, reason: $r} end')
+          aws lambda invoke --function-name cost-kill-switch --cli-binary-format raw-in-base64-out \
+            --payload "$payload" response.json > meta.json
+          # Only the error type: messages can quote ARNs. Details are in the function's logs.
+          if jq -e '.FunctionError' meta.json > /dev/null; then
+            echo "::error::the kill switch failed: $(jq -r '.errorType // "unknown"' response.json)"
+            exit 1
+          fi
+          {
+            echo '### Cost kill switch'
+            echo
+            echo '```json'
+            jq '{status, reason, tripped_at, estimate_usd, acknowledged_usd, distributions, functions}' response.json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

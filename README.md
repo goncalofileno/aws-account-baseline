@@ -125,6 +125,56 @@ Two cost alarms, on purpose:
   (`aws ce get-anomaly-monitors --region us-east-1`), import it instead of creating a second. Detection
   needs about 10 days of usage history and runs up to 24 hours after the usage.
 
+## Cost kill switch
+
+The budget and Cost Anomaly Detection only send email, and billing data lags by hours. The kill
+switch acts on its own instead (design: `docs/specs/2026-11-09-cost-kill-switch-design.md`):
+
+- **Every minute**, the `cost-kill-switch` Lambda estimates this month's spend from CloudWatch
+  metrics: CloudFront (read in `us-east-1`), API Gateway and Lambda. It uses deliberately high
+  prices and ignores free tiers. When the estimate passes USD 5 above what was last acknowledged,
+  it trips.
+- **The actual bill** trips it too: the budget publishes to `cost-kill-switch-trigger` at USD 10
+  and again at USD 20.
+- **A trip:**
+  - disables every CloudFront distribution;
+  - sets every other Lambda's reserved concurrency to 0;
+  - records what it changed in `/cost-kill-switch/state`;
+  - emails the owner through `cost-kill-switch-alerts`.
+
+  While tripped, it re-applies that every minute. The cv-site deploy refuses to run.
+- **Two alarms** email if the function errors for 5 minutes or stops running for 10.
+
+Cost: USD 0, all inside the free tiers.
+
+### Runbook
+
+- **Status, trip, rearm:** Actions → `kill-switch` → Run workflow, then pick the action. `trip` and
+  `rearm` need a reason. The `kill-switch` environment asks for approval; this works from the
+  GitHub mobile app. A failure shows only its error code (`kill switch failed: <code>`); details are
+  in the function's logs.
+- **After a trip:**
+  1. Read the alert and the function's logs (`/aws/lambda/cost-kill-switch`).
+  2. Find the cause in the CloudFront and API metrics. Wait until it has stopped or been blocked.
+  3. Rearm. A rearm restores exactly what the trip changed and acknowledges the spend so far, so
+     the switch trips again only after another USD 5 this month.
+- **Without GitHub** (local session, `aws login --profile personal`):
+
+  ```bash
+  aws lambda invoke --function-name cost-kill-switch --cli-binary-format raw-in-base64-out \
+    --payload '{"action":"rearm","reason":"..."}' --profile personal --region eu-north-1 /dev/stdout
+  ```
+
+- **If a rearm fails halfway**, the state stays `tripped` and the next minute disables things
+  again. Run the rearm again.
+- **While tripped, a metrics outage is quiet.** Enforcement doesn't need the metrics, so a tripped
+  switch keeps the site off without raising; the estimate shows as unknown and the errors alarm
+  stays quiet. A rearm needs the metrics, so it fails until they're readable again.
+- **One-time setup after the first apply:**
+  - confirm the subscription email from AWS;
+  - create the `kill-switch` environment with the owner as required reviewer;
+  - set the secret `AWS_ROLE_KILL_SWITCH` to the `kill_switch_operator_role_arn` output.
+
 ## Layout
 
 ```
