@@ -63,12 +63,6 @@ flowchart LR
   (`lambda:Principal`). The role can only create `cv-site-*` roles that carry the `cv-site-boundary`
   permissions boundary, `iam:PassRole` only to `lambda.amazonaws.com`, and it cannot change the
   boundary, and cannot touch the CI roles (itself and `cv-site-preview`) or any `baseline-*` role.
-- **Traffic alarms stay in their lane.** `cv-site-deploy` manages CloudWatch alarms only under
-  the `cv-site-*` names in `us-east-1`, where CloudFront publishes its metrics. They email the owner
-  through AWS User Notifications (the region SCP denies SNS there): the role gets the explicit list
-  of hub, configuration, event-rule, channel and email-contact calls the provider makes, on `*`
-  because the hub and List calls take no resource and the rest have random IDs. A new email contact
-  receives nothing until its owner clicks the activation link. `cv-site-preview` can only read them.
   Both roles may call `organizations:DescribeOrganization` (read-only), so the deploy workflow can
   mask the organization and management account IDs before anything prints them.
 - **Human-approved applies.** IAM changes to this repo go through a GitHub Environment with a required reviewer.
@@ -216,9 +210,8 @@ upgraded to the Paid plan with "advanced AWS features" activated. That makes it 
 Identity Delegated Admin account), and AWS-managed SCPs are already in place — including a region
 floor that only allows `eu-north-1` (this project's home region), `us-east-1` and `us-west-2` (plus
 global/unspecified requests). `var.region` is validated against that list. Outside `eu-north-1` the
-floor only lets some services through: ACM, CloudWatch, Cost Explorer and AWS User Notifications
-work in `us-east-1`, SNS and EventBridge do not (which is why the cv-site traffic alarms email the
-owner through User Notifications, not an SNS topic). There are no IAM users
+floor only lets some services through in `us-east-1`: ACM, Cost Explorer and AWS User Notifications work, CloudWatch
+allows reads only (no `PutMetricAlarm`), and SNS and EventBridge are denied. There are no IAM users
 and no IAM Identity Center setup by the owner.
 
 1. Root user (management account): enable MFA and make sure no root access keys exist. It is used

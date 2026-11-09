@@ -14,28 +14,6 @@ locals {
     "arn:aws:apigateway:${var.region}::/tags/*",
   ]
   ssm_kms_condition = { StringEquals = { "kms:ViaService" = "ssm.${var.region}.amazonaws.com" } }
-  # CloudFront publishes its metrics only in us-east-1, so the site's traffic alarms live there.
-  # The account's region SCP allows CloudWatch in us-east-1 but denies SNS (and EventBridge), so
-  # the alarms email the owner through AWS User Notifications instead of an SNS topic.
-  cv_site_alarms = "arn:aws:cloudwatch:us-east-1:${local.account_id}:alarm:cv-site-*"
-  # Exactly the AWS User Notifications calls the Pulumi provider makes for a notification hub, a
-  # notification configuration with one event rule, and one email contact associated as its
-  # channel. Some of them (the hub and List calls) take no resource type, and the ARNs of the
-  # rest end in random IDs, so they are granted on "*": this account only hosts cv-site, and an
-  # email contact receives nothing until its owner clicks the activation link AWS sends it.
-  cv_site_notification_actions = [
-    "notifications:RegisterNotificationHub", "notifications:DeregisterNotificationHub", "notifications:ListNotificationHubs",
-    "notifications:CreateNotificationConfiguration", "notifications:GetNotificationConfiguration",
-    "notifications:UpdateNotificationConfiguration", "notifications:DeleteNotificationConfiguration",
-    "notifications:CreateEventRule", "notifications:GetEventRule", "notifications:UpdateEventRule",
-    "notifications:DeleteEventRule", "notifications:ListEventRules",
-    "notifications:AssociateChannel", "notifications:DisassociateChannel", "notifications:ListChannels",
-    "notifications:TagResource", "notifications:UntagResource", "notifications:ListTagsForResource",
-    "notifications-contacts:CreateEmailContact", "notifications-contacts:GetEmailContact",
-    "notifications-contacts:DeleteEmailContact", "notifications-contacts:ListEmailContacts",
-    "notifications-contacts:SendActivationCode",
-    "notifications-contacts:TagResource", "notifications-contacts:UntagResource", "notifications-contacts:ListTagsForResource",
-  ]
 }
 
 # Permissions boundary attached to every role the cv-site Pulumi stack creates (the Lambda
@@ -142,17 +120,6 @@ locals {
         Resource = "arn:aws:ses:${var.region}:${local.account_id}:identity/*"
       },
       { Sid = "SesListIdentities", Effect = "Allow", Action = ["ses:ListEmailIdentities"], Resource = "*" },
-      # Every action below takes the alarm resource type, including DescribeAlarms: the Pulumi
-      # provider reads an alarm with DescribeAlarms(AlarmNames, AlarmTypes = MetricAlarm), which a
-      # scoped grant allows (only composite alarms need DescribeAlarms on "*"), and reads its tags
-      # with ListTagsForResource. TagResource also covers tag-on-create in PutMetricAlarm.
-      {
-        Sid      = "SiteAlarms"
-        Effect   = "Allow"
-        Action   = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"]
-        Resource = local.cv_site_alarms
-      },
-      { Sid = "SiteAlertNotifications", Effect = "Allow", Action = local.cv_site_notification_actions, Resource = "*" },
       # Read-only: lets the deploy workflow mask the organization and management account IDs
       # before any step can print them (an SCP denial message quotes the SCP's ARN, which holds both).
       { Sid = "DescribeOrganization", Effect = "Allow", Action = ["organizations:DescribeOrganization"], Resource = "*" },
@@ -204,8 +171,6 @@ locals {
       { Sid = "LogsRead", Effect = "Allow", Action = ["logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = "*" },
       { Sid = "SsmMetadataRead", Effect = "Allow", Action = ["ssm:DescribeParameters", "ssm:ListTagsForResource"], Resource = "*" },
       { Sid = "SesRead", Effect = "Allow", Action = ["ses:Get*", "ses:List*"], Resource = "*" },
-      { Sid = "AlarmRead", Effect = "Allow", Action = ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"], Resource = local.cv_site_alarms },
-      { Sid = "AlertNotificationsRead", Effect = "Allow", Action = ["notifications:Get*", "notifications:List*", "notifications-contacts:Get*", "notifications-contacts:List*"], Resource = "*" },
       { Sid = "DescribeOrganization", Effect = "Allow", Action = ["organizations:DescribeOrganization"], Resource = "*" },
       { Sid = "IamRead", Effect = "Allow", Action = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"], Resource = local.cv_site_role_arns },
     ]
