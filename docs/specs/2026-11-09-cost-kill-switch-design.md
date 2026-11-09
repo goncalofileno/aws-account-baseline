@@ -56,12 +56,13 @@ tested on 2026-11-09 and returns 1-minute CloudFront data with about 4 minutes o
 
 Everything is in the baseline repo (Terraform), in `eu-north-1`, except the CloudFront metrics it
 reads in `us-east-1`. No name starts with `cv-site-`. The cv-site roles are scoped to that prefix,
-so they can't change any part of the guard.
+so they can't change any part of the guard. The IAM roles are named `baseline-*`: `baseline-apply`
+already manages that prefix, and `cv-site-deploy` is denied `iam:*` on it.
 
 ```
 EventBridge Scheduler (rate 1 min) ──{"action":"check"}──▶ ┐
 Budget monthly-cost ACTUAL >200% / >400% ─▶ SNS cost-kill-switch-trigger ─▶ │ Lambda cost-kill-switch
-GitHub workflow "kill-switch" (trip/rearm/status) ─▶ OIDC role cost-kill-switch-operator ─▶ ┘
+GitHub workflow "kill-switch" (trip/rearm/status) ─▶ OIDC role baseline-kill-switch-operator ─▶ ┘
         │  reads: CloudWatch metrics (us-east-1, eu-north-1), CloudFront, Lambda, API Gateway
         │  state: SSM /cost-kill-switch/state
         └─▶ SNS cost-kill-switch-alerts ─▶ email (var.alert_email)
@@ -72,15 +73,15 @@ CloudWatch alarms (eu-north-1) on the Lambda: errors, heartbeat ─▶ SNS cost-
 |---|---|
 | `aws_lambda_function.cost_kill_switch` | Python 3.13, boto3 from the runtime, no dependencies. Code in `functions/cost_kill_switch/`, zipped with `archive_file` (adds the `hashicorp/archive` provider). Memory 128 MB, timeout 60 s, reserved concurrency 1. Env: `STATE_PARAMETER`, `ALERTS_TOPIC_ARN`, `TRIGGER_TOPIC_ARN`, `THRESHOLD_USD=5` |
 | Log group `/aws/lambda/cost-kill-switch` | 30-day retention. One JSON line per run (estimate and decision): about 4 MB a month |
-| IAM role `cost-kill-switch` | See §7 |
-| `aws_scheduler_schedule` `cost-kill-switch-check` | `rate(1 minute)`, input `{"action":"check"}`, no retries (the next minute is the retry), flexible window off, its own role allowed only `lambda:InvokeFunction` on the function |
+| IAM role `baseline-cost-kill-switch` | See §7 |
+| `aws_scheduler_schedule` `cost-kill-switch-check` | `rate(1 minute)`, input `{"action":"check"}`, no retries (the next minute is the retry), flexible window off, its own role `baseline-kill-switch-scheduler` allowed only `lambda:InvokeFunction` on the function |
 | SNS `cost-kill-switch-trigger` | Topic policy lets `budgets.amazonaws.com` publish, conditioned on `aws:SourceAccount` and `aws:SourceArn` (`arn:aws:budgets::<account>:*`). Lambda subscription. Unencrypted (see §9) |
 | SNS `cost-kill-switch-alerts` | Email subscription to `var.alert_email` (confirmed once by the owner). Only the Lambda and CloudWatch can publish |
 | SSM parameter `/cost-kill-switch/state` | `String`, created as the armed state. `lifecycle { ignore_changes = [value] }`, since the Lambda owns the value |
 | Budget `monthly-cost` | Two new notifications: ACTUAL > 200% (USD 10) and ACTUAL > 400% (USD 20), SNS subscriber `cost-kill-switch-trigger` |
 | Alarm `cost-kill-switch-errors` | `AWS/Lambda` `Errors` Sum ≥ 1, period 60 s, 5 of 5 datapoints, missing data not breaching. Alarm and OK actions → alerts topic |
 | Alarm `cost-kill-switch-heartbeat` | `AWS/Lambda` `Invocations` Sum < 1, period 600 s, 1 of 1, missing data **breaching**. Alarm and OK actions → alerts topic |
-| OIDC role `cost-kill-switch-operator` | Through `modules/github-oidc-role`, subject `environment:kill-switch` of this repo. Only `lambda:InvokeFunction` on the function |
+| OIDC role `baseline-kill-switch-operator` | Through `modules/github-oidc-role`, subject `environment:kill-switch` of this repo. Only `lambda:InvokeFunction` on the function |
 | Workflow `.github/workflows/kill-switch.yml` | `workflow_dispatch`, inputs `action` (`status`, `trip`, `rearm`) and `reason` (required for `trip` and `rearm`). Job environment `kill-switch` (required reviewer: owner). Role ARN from secret `AWS_ROLE_KILL_SWITCH`. Fails when the invocation returns a `FunctionError`. Prints only the status, the reason and counts, never IDs |
 
 ## 5. Behaviour
@@ -193,7 +194,7 @@ the errors alarm fires. It is never treated as armed.
 
 ## 7. IAM
 
-**Role `cost-kill-switch`** (the Lambda):
+**Role `baseline-cost-kill-switch`** (the Lambda):
 
 | Statement | Actions | Resource |
 |---|---|---|
@@ -252,7 +253,8 @@ the errors alarm fires. It is never treated as armed.
   - the schedule input and rate;
   - the alarm settings, including `treat_missing_data`;
   - the budget notifications pointing at the trigger topic;
-  - `ignore_changes` on the parameter value;
+  - the initial value of the state parameter (`terraform test` can't see `lifecycle`, so
+    `ignore_changes` on its value is checked in review);
   - the operator role's subject.
 - **checkov:** inline skips with reasons:
   - SNS without a customer KMS key: Budgets can't publish to a topic encrypted with the AWS-managed
@@ -281,6 +283,9 @@ the errors alarm fires. It is never treated as armed.
 
 ## 11. Rollout
 
+0. **Baseline PR "kill switch permissions":** `baseline-plan`/`baseline-apply` grants for the new
+   resources and the `cv-site-deploy` read of the state. A role can't use permissions granted in the
+   same apply, so this goes first.
 1. **Baseline PR "cost kill switch":** apply; the owner confirms the alerts email subscription and
    creates the `kill-switch` environment (required reviewer: owner) and the secret
    `AWS_ROLE_KILL_SWITCH`; run the workflow with `status`.
