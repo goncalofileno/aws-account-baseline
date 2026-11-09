@@ -317,7 +317,7 @@ run "cv_site_deploy_policy_matches_exactly" {
       "CreateSiteBuckets", "SiteBuckets", "CloudFront", "AcmForCloudFront", "SiteFunctions",
       "SiteFunctionPermissions", "HttpApis", "SiteLogGroups", "DescribeLogGroups", "SiteParameters",
       "DescribeParameters", "SsmKmsViaService", "SesIdentityManagement", "SesListIdentities",
-      "SiteAlarms", "SiteAlertNotifications", "DescribeOrganization", "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
+      "SiteAlarms", "SiteAlertNotifications", "DescribeOrganization", "KillSwitchState", "CreateRolesOnlyWithBoundary", "ManageSiteRoles", "PassSiteRolesToLambda", "ReadBoundaryPolicy",
       "DenyTouchingCiRoles", "DenyRemovingBoundary", "DenyChangingBoundaryPolicy", "DenyBaselineRoles",
     ]
     error_message = "cv-site-deploy policy must declare exactly these statements, in this order."
@@ -435,6 +435,7 @@ run "cv_site_deploy_policy_matches_exactly" {
         Condition = null
       }
       DescribeOrganization = { Effect = "Allow", Action = ["organizations:DescribeOrganization"], Resource = ["*"], Condition = null }
+      KillSwitchState      = { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = ["arn:aws:ssm:eu-north-1:123456789012:parameter/cost-kill-switch/state"], Condition = null }
       CreateRolesOnlyWithBoundary = {
         Effect    = "Allow"
         Action    = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
