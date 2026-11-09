@@ -376,3 +376,70 @@ def test_make_clients_use_short_timeouts_and_bounded_retries(monkeypatch):
         assert (cfg.connect_timeout, cfg.read_timeout) == (5, 10)
         assert cfg.retries == {"mode": "standard", "total_max_attempts": 4}
     assert clients["cloudwatch_us_east_1"].meta.region_name == "us-east-1"
+
+
+def test_a_tripped_check_reads_no_metrics_and_still_re_disables():
+    w = _tripped_world(cf_sums=FLOOD)
+    w.cloudfront.enabled["E1"] = True  # re-enabled behind the switch's back
+    result = w.switch.run({"action": "check"}, NOW)
+    assert w.cw_us.calls == [] and w.cw.calls == []
+    assert w.cloudfront.enabled["E1"] is False
+    assert result["estimate_usd"] is None
+    assert w.sns.published == []
+
+
+def test_a_manual_trip_enforces_before_reading_any_metric():
+    w = World(cf_sums=QUIET)
+    seen = []
+    original = w.cw_us.get_metric_statistics
+
+    def checked(**kw):
+        seen.append(w.cloudfront.enabled["E1"])
+        return original(**kw)
+
+    w.cw_us.get_metric_statistics = checked
+    result = w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert seen and not any(seen)  # every read happened after the distribution was disabled
+    assert result["estimate_usd"] == pytest.approx(0.12)
+    assert w.ssm.state["estimate_usd"] == pytest.approx(0.12)
+    assert w.ssm.writes[0]["estimate_usd"] is None  # the first write is the bare trip
+    assert "USD 0.12" in w.sns.published[0][1]
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_a_budget_trip_still_trips_and_alerts_when_metrics_fail():
+    w = World(cw_fail=True)
+    result = w.switch.run(budget_event(), NOW)
+    assert result["status"] == "tripped" and result["estimate_usd"] is None
+    assert w.cloudfront.enabled["E1"] is False
+    assert "unknown" in w.sns.published[0][1]
+
+
+def test_a_trip_logs_an_enforcement_failure(caplog):
+    w = World(dists={"E1": True}, cw_fail=True)
+    w.cloudfront.update_distribution = lambda **_: (_ for _ in ()).throw(client_error_("UpdateDistribution"))
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert "enforcement failed during the trip" in caplog.text
+    assert len(w.sns.published) == 1
+
+
+def client_error_(op):
+    return ClientError({"Error": {"Code": "PreconditionFailed", "Message": "x"}}, op)
+
+
+def test_more_than_20_reads_in_a_run_raises_after_acting():
+    w = World(dists={f"E{i}": True for i in range(7)}, cf_sums={("AWS/CloudFront", "BytesDownloaded", "E0"): 50e9})
+    with pytest.raises(RuntimeError, match="metric reads in one run"):
+        w.switch.run({"action": "check"}, NOW)
+    assert w.ssm.state["status"] == "tripped"
+    assert not any(w.cloudfront.enabled.values())
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_the_read_cap_error_leaves_the_lambda_sanitised(monkeypatch):
+    w = World(dists={f"E{i}": True for i in range(7)}, cf_sums=QUIET)
+    _env(monkeypatch, w.switch.c)
+    with pytest.raises(RuntimeError) as info:
+        handler.lambda_handler({"action": "check"}, None)
+    assert str(info.value) == "kill switch failed: RuntimeError"

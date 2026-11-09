@@ -222,15 +222,17 @@ class KillSwitch:
             LOG.info(json.dumps({"action": "ignore"}))
             return {"status": "ignored"}
         enforced = False
+        self.reads = 0
         loaded = self.load_state()
         s = st.roll_month(loaded, now)
         if s is not loaded:
             self.save_state(s)
-        # A trip, and a switch that is already tripped, must not depend on metrics (enforcement has to
-        # go on); everything else fails open when they can't be read.
-        if action == "trip" or (action == "check" and s["status"] == st.TRIPPED):
-            estimate = self._estimate_or_none(now)
-        else:
+        # Enforcement never waits on metric reads: a tripped check reads none, and a trip reads its
+        # estimate only after enforcing. Everything else fails open when they can't be read.
+        estimate = None
+        if action == "check" and s["status"] == st.TRIPPED:
+            pass
+        elif action != "trip":
             estimate = estimate_usd(self.usage(now))
         if action == "check" and s["status"] == st.ARMED and over_threshold(estimate, s["acknowledged_usd"], self.threshold_usd):
             action = "trip"
@@ -243,14 +245,21 @@ class KillSwitch:
         elif action == "trip" and s["status"] == st.ARMED:
             s = st.tripped(s, reason=reason, now=now, estimate=estimate)
             self.save_state(s)
-            # Enforce first, then alert, so a failed alert can't delay the shutdown and a failed
-            # enforcement can't swallow the alert; the enforcement error is raised afterwards.
+            # Enforce first (no metric read before it), then the best-effort estimate, then the alert,
+            # so a failed alert or read can't delay the shutdown and a failed enforcement can't
+            # swallow the alert; the enforcement error is raised afterwards.
             enforce_error = None
             try:
                 s = self.enforce(s)
             except Exception as e:  # noqa: BLE001
+                LOG.exception("enforcement failed during the trip")
                 enforce_error = e
             enforced = True
+            if estimate is None:
+                estimate = self._estimate_or_none(now)
+                if estimate is not None:
+                    s = {**s, "estimate_usd": round(estimate, 4)}
+                    self.save_state(s)
             self.alert(
                 "Cost kill switch TRIPPED",
                 f"Reason: {reason}\nTime: {s['tripped_at']}\nEstimated spend this month: {_usd(estimate)}\n"
@@ -263,6 +272,12 @@ class KillSwitch:
             s = self.enforce(s)
         result = summary(s, estimate)
         LOG.info(json.dumps({"action": action, **result}))
+        if self.reads > READS_WARNING:
+            # After everything was decided and saved, so the errors alarm emails without delaying a stop.
+            raise RuntimeError(
+                f"{self.reads} metric reads in one run: over the free tier at one run a minute; "
+                "reduce resources or raise the cap"
+            )
         return result
 
 
