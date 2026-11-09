@@ -58,6 +58,7 @@ jobs:
           # The Lambda's message is code-only by design; anything else is withheld.
           if jq -e '.FunctionError' meta.json > /dev/null; then
             msg=$(jq -r '(.errorMessage // "") | if test("^kill switch failed: [A-Za-z0-9_.]+$") then . else "kill switch failed: unknown" end' response.json 2>/dev/null || echo "kill switch failed: unknown")
+            [ -n "$msg" ] || msg="kill switch failed: unknown"
             echo "::error::$msg (details in the function's logs)"
             exit 1
           fi
