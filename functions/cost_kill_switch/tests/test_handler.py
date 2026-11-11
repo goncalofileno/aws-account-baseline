@@ -203,7 +203,8 @@ def test_usage_reads_every_resource_with_the_right_dimensions():
     )
     usage = w.switch.usage(NOW)
     assert usage == handler.Usage(
-        cloudfront_bytes=4e9, cloudfront_requests=10_000, api_requests=1e6, lambda_invocations=1e6, lambda_gb_seconds=2.0
+        cloudfront_bytes_down=3e9,
+        cloudfront_bytes_up=1e9, cloudfront_requests=10_000, api_requests=1e6, lambda_invocations=1e6, lambda_gb_seconds=2.0
     )
     cf = w.cw_us.calls[0]
     assert cf["Dimensions"] == [{"Name": "DistributionId", "Value": "E1"}, {"Name": "Region", "Value": "Global"}]
@@ -758,3 +759,172 @@ def test_a_missing_new_environment_variable_fails_sanitised(monkeypatch):
         with pytest.raises(RuntimeError) as info:
             handler.lambda_handler({"action": "status"}, None)
         assert str(info.value) == "kill switch failed: KeyError"
+
+
+# --- whole-branch fix round
+
+
+def _broken(code="Throttling", op="List"):
+    def raiser(*_, **__):
+        raise client_error_(op)
+
+    return raiser
+
+
+def test_a_failing_api_listing_does_not_stop_distributions_or_functions():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    w.apigw.get_paginator = _broken()
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.cloudfront.enabled["E1"] is False
+    assert w.lambda_.reserved["cv-site-contact"] == 0
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_a_failing_distribution_listing_does_not_stop_apis_or_functions():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    w.cloudfront.get_paginator = _broken()
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.apigw.disabled["a1"] is True
+    assert w.lambda_.reserved["cv-site-contact"] == 0
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_a_failing_function_listing_does_not_stop_distributions_or_apis():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    w.lambda_.get_paginator = _broken()
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.apigw.disabled["a1"] is True and w.cloudfront.enabled["E1"] is False
+    assert len(w.sns.published) == 1
+
+
+def test_a_failed_record_save_leaves_that_resource_unchanged_and_the_other_kinds_go_on():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    put = w.ssm.put_parameter
+
+    def flaky(Name, Value, Type, Overwrite):
+        if '"disabled_distributions":["E1"]' in Value:
+            raise client_error_("PutParameter")
+        put(Name, Value, Type, Overwrite)
+
+    w.ssm.put_parameter = flaky
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.cloudfront.enabled["E1"] is True  # not recorded, so not changed
+    assert w.apigw.disabled["a1"] is True and w.lambda_.reserved["cv-site-contact"] == 0
+    assert w.ssm.state["disabled_distributions"] == []
+    assert len(w.sns.published) == 1
+
+
+def _long_functions(n=150):
+    return {f"function-with-a-fairly-long-name-{i:03d}-{'x' * 20}"[:53].ljust(53, "y"): (128, 2) for i in range(n)}
+
+
+def test_a_full_state_still_stops_every_resource_and_says_so(monkeypatch):
+    funcs = _long_functions()
+    assert len(funcs) == 150 and all(len(n) == 53 for n in funcs)
+    w = World(functions=funcs, limits=(100, 100, 200), cw_fail=True)
+    result = w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert all(r == 0 for n, r in w.lambda_.reserved.items() if n != SELF)
+    assert max(w.ssm.sizes) <= handler.STATE_MAX_BYTES
+    s = w.ssm.state
+    recorded = s["concurrency"]
+    assert 0 < len(recorded) < 150 and all(v == 2 for v in recorded.values())
+    unrecorded = 150 - len(recorded)
+    assert f"{unrecorded} resource(s) were stopped without a record because the state is full" in w.sns.published[0][1]
+    assert "a rearm will not restore them" in w.sns.published[0][1]
+    assert result["status"] == "tripped"
+    # A rearm restores exactly the recorded ones (metrics readable again; the read cap is not the subject here).
+    monkeypatch.setattr(handler, "READS_WARNING", 10_000)
+    w.cw_us.fail = w.cw.fail = False
+    w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    restored = {n for n, r in w.lambda_.reserved.items() if r == 2}
+    assert restored == set(recorded)
+
+
+def test_a_full_state_does_not_raise_for_unrecorded_alone_and_a_later_run_is_quiet():
+    w = World(functions=_long_functions(), limits=(100, 100, 200), cw_fail=True)
+    w.switch.run({"action": "trip", "reason": "drill"}, NOW)  # no raise
+    before = len(w.sns.published)
+    w.switch.run({"action": "check"}, NOW)
+    assert len(w.sns.published) == before
+
+
+def test_the_overflow_check_applies_to_distributions_and_apis_too(monkeypatch):
+    monkeypatch.setattr(handler, "STATE_MAX_BYTES", 400)
+    w = World(dists={f"E{'D' * 30}{i}": True for i in range(20)}, apis=[f"api-{'a' * 30}{i}" for i in range(20)], functions={}, limits=(100, 100, 100), cw_fail=True)
+    w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert not any(w.cloudfront.enabled.values()) and all(w.apigw.disabled.values())
+    assert max(w.ssm.sizes) <= 400
+    assert "stopped without a record" in w.sns.published[0][1]
+
+
+class Clock:
+    def __init__(self, ok_calls):
+        self.calls, self.ok_calls = 0, ok_calls
+
+    def __call__(self):
+        self.calls += 1
+        return 100_000 if self.calls <= self.ok_calls else 5_000
+
+
+def test_enforcement_stops_when_time_runs_out_then_the_alert_goes_out_and_the_next_run_finishes():
+    funcs = {f"f{i}": (128, 2) for i in range(5)}
+    w = World(functions=funcs, cf_sums=QUIET)
+    with pytest.raises(RuntimeError, match="out of time; the next run continues"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW, remaining_ms=Clock(3))
+    s = w.ssm.state
+    assert w.cloudfront.enabled["E1"] is False
+    assert [n for n, r in w.lambda_.reserved.items() if n != SELF and r == 0] == ["f0", "f1"]
+    assert sorted(s["concurrency"]) == ["f0", "f1"] and s["disabled_distributions"] == ["E1"]
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    assert w.cw_us.calls == [] and w.cw.calls == []  # no slow estimate between enforcement and the alert
+    w.switch.run({"action": "check"}, NOW)  # the next minute, with time
+    assert all(r == 0 for n, r in w.lambda_.reserved.items() if n != SELF)
+    assert sorted(w.ssm.state["concurrency"]) == ["f0", "f1", "f2", "f3", "f4"]
+    assert len(w.sns.published) == 1
+
+
+def test_lambda_handler_passes_the_remaining_time_lazily(monkeypatch):
+    from types import SimpleNamespace
+
+    w = World(functions={"f0": (128, 2)}, cf_sums=QUIET)
+    _env(monkeypatch, w.switch.c)
+    ctx = SimpleNamespace(get_remaining_time_in_millis=lambda: 1_000)
+    with pytest.raises(RuntimeError) as info:
+        handler.lambda_handler({"action": "trip", "reason": "drill"}, ctx)
+    assert str(info.value) == "kill switch failed: RuntimeError"
+    assert w.cloudfront.enabled["E1"] is True and w.lambda_.reserved["f0"] == 2  # out of time: nothing changed
+    assert w.ssm.state["status"] == "tripped" and len(w.sns.published) == 1
+
+
+def test_a_manual_trip_over_an_inventory_limit_reads_no_metrics():
+    w = World(dists={"E1": True, "E2": True, "E3": True}, limits=(2, 100, 100), cf_sums=QUIET)
+    result = w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.cw_us.calls == [] and w.cw.calls == []
+    assert result["estimate_usd"] is None and "unknown" in w.sns.published[0][1]
+    assert not any(w.cloudfront.enabled.values())
+
+
+def test_rearm_restores_apis_and_functions_before_distributions():
+    w = World(apis=["a1"], cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    log = []
+    cf, api, put = w.cloudfront.update_distribution, w.apigw.update_api, w.lambda_.put_function_concurrency
+    w.cloudfront.update_distribution = lambda **kw: log.append("cf") or cf(**kw)
+    w.apigw.update_api = lambda **kw: log.append("api") or api(**kw)
+    w.lambda_.put_function_concurrency = lambda **kw: log.append("fn") or put(**kw)
+    w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    assert log == ["api", "fn", "cf"]
+
+
+def test_a_failing_distribution_restore_leaves_the_state_tripped_and_the_backend_already_restored():
+    w = World(apis=["a1"], cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    w.cloudfront.update_distribution = lambda **_: (_ for _ in ()).throw(client_error_("UpdateDistribution"))
+    with pytest.raises(ClientError):
+        w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    assert w.ssm.state["status"] == "tripped"
+    assert w.apigw.disabled["a1"] is False and w.lambda_.reserved["cv-site-contact"] == 2

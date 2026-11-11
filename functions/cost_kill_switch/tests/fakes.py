@@ -114,6 +114,7 @@ class Ssm:
     def __init__(self, value):
         self.value = value
         self.writes = []
+        self.sizes = []
 
     def get_parameter(self, Name):
         assert Name == PARAM
@@ -124,6 +125,7 @@ class Ssm:
     def put_parameter(self, Name, Value, Type, Overwrite):
         assert (Name, Type, Overwrite) == (PARAM, "String", True)
         self.value = Value
+        self.sizes.append(len(Value.encode()))
         self.writes.append(st.parse(Value))
 
     @property

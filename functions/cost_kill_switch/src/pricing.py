@@ -16,7 +16,8 @@ LAMBDA_PER_GB_SECOND = 0.0000167
 
 @dataclass(frozen=True)
 class Usage:
-    cloudfront_bytes: float = 0.0
+    cloudfront_bytes_down: float = 0.0  # BytesDownloaded: the only bytes the free allowance covers
+    cloudfront_bytes_up: float = 0.0  # BytesUploaded: priced in full
     cloudfront_requests: float = 0.0
     api_requests: float = 0.0
     lambda_invocations: float = 0.0
@@ -24,8 +25,9 @@ class Usage:
 
 
 def estimate_usd(usage: Usage, *, free_cloudfront_bytes: float = 0.0, free_cloudfront_requests: float = 0.0) -> float:
-    """The CloudFront free allowance (a monthly tier) comes off the CloudFront terms only, floored at zero."""
-    billable_bytes = max(0.0, usage.cloudfront_bytes - free_cloudfront_bytes)
+    """The CloudFront free allowance (a monthly tier) comes off downloaded bytes and requests only, floored
+    at zero. Uploaded bytes are priced in full, at the same per-GB price."""
+    billable_bytes = max(0.0, usage.cloudfront_bytes_down - free_cloudfront_bytes) + usage.cloudfront_bytes_up
     billable_requests = max(0.0, usage.cloudfront_requests - free_cloudfront_requests)
     return (
         billable_bytes / 1e9 * CLOUDFRONT_PER_GB
