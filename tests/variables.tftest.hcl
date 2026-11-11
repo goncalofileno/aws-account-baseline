@@ -82,3 +82,62 @@ run "root_tags_are_exact" {
     error_message = "Root module must tag every resource with exactly this map via default_tags."
   }
 }
+
+run "rejects_invalid_kill_switch_max_distributions" {
+  command = plan
+
+  variables {
+    kill_switch_max_distributions = 0
+  }
+
+  expect_failures = [var.kill_switch_max_distributions]
+}
+
+run "rejects_invalid_kill_switch_max_apis" {
+  command = plan
+
+  variables {
+    kill_switch_max_apis = 0
+  }
+
+  expect_failures = [var.kill_switch_max_apis]
+}
+
+run "rejects_invalid_kill_switch_max_functions" {
+  command = plan
+
+  variables {
+    kill_switch_max_functions = 1.5
+  }
+
+  expect_failures = [var.kill_switch_max_functions]
+}
+
+run "rejects_invalid_kill_switch_free_cloudfront_bytes" {
+  command = plan
+
+  variables {
+    kill_switch_free_cloudfront_bytes = -1
+  }
+
+  expect_failures = [var.kill_switch_free_cloudfront_bytes]
+}
+
+run "rejects_invalid_kill_switch_free_cloudfront_requests" {
+  command = plan
+
+  variables {
+    kill_switch_free_cloudfront_requests = 0.5
+  }
+
+  expect_failures = [var.kill_switch_free_cloudfront_requests]
+}
+
+run "accepts_zero_free_allowance" {
+  command = plan
+
+  variables {
+    kill_switch_free_cloudfront_bytes    = 0
+    kill_switch_free_cloudfront_requests = 0
+  }
+}

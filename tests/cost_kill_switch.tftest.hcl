@@ -77,8 +77,14 @@ run "the_function_is_configured_as_designed" {
       ALERTS_TOPIC_ARN  = "arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-alerts"
       TRIGGER_TOPIC_ARN = "arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-trigger"
       THRESHOLD_USD     = "5"
+
+      MAX_DISTRIBUTIONS        = "1"
+      MAX_APIS                 = "1"
+      MAX_FUNCTIONS            = "1"
+      FREE_CLOUDFRONT_BYTES    = "1000000000000"
+      FREE_CLOUDFRONT_REQUESTS = "10000000"
     })
-    error_message = "The function must get exactly the state parameter, both topics and the USD 5 threshold."
+    error_message = "The function must get exactly the state parameter, both topics, the USD 5 threshold, the inventory limits and the CloudFront free allowance (plain decimal strings)."
   }
 
   assert {
@@ -106,7 +112,7 @@ run "the_function_policy_matches_exactly" {
 
   assert {
     condition = [for s in jsondecode(aws_iam_role_policy.kill_switch.policy).Statement : s.Sid] == [
-      "ReadMetrics", "ListDistributions", "SwitchDistributions", "ListApis", "ListFunctions",
+      "ReadMetrics", "ListDistributions", "SwitchDistributions", "ListApis", "SwitchApiEndpoints", "ListFunctions",
       "FunctionConcurrency", "NotItself", "State", "Alerts", "Logs",
     ]
     error_message = "Kill switch policy must declare exactly these statements, in this order."
@@ -121,6 +127,7 @@ run "the_function_policy_matches_exactly" {
       ListDistributions   = { Effect = "Allow", Action = ["cloudfront:ListDistributions"], Resource = ["*"] }
       SwitchDistributions = { Effect = "Allow", Action = ["cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution"], Resource = ["arn:aws:cloudfront::123456789012:distribution/*"] }
       ListApis            = { Effect = "Allow", Action = ["apigateway:GET"], Resource = ["arn:aws:apigateway:eu-north-1::/apis"] }
+      SwitchApiEndpoints  = { Effect = "Allow", Action = ["apigateway:PATCH"], Resource = ["arn:aws:apigateway:eu-north-1::/apis/*"] }
       ListFunctions       = { Effect = "Allow", Action = ["lambda:ListFunctions"], Resource = ["*"] }
       FunctionConcurrency = { Effect = "Allow", Action = ["lambda:GetFunctionConcurrency", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency"], Resource = ["arn:aws:lambda:eu-north-1:123456789012:function:*"] }
       NotItself           = { Effect = "Deny", Action = ["lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency"], Resource = ["arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch"] }
@@ -273,7 +280,7 @@ run "the_state_starts_armed" {
     condition = (
       aws_ssm_parameter.kill_switch_state.name == "/cost-kill-switch/state" &&
       aws_ssm_parameter.kill_switch_state.type == "String" &&
-      aws_ssm_parameter.kill_switch_state.value == "{\"acknowledged_usd\":0,\"concurrency\":{},\"disabled_distributions\":[],\"estimate_usd\":null,\"month\":\"1970-01\",\"reason\":null,\"status\":\"armed\",\"tripped_at\":null}"
+      aws_ssm_parameter.kill_switch_state.value == "{\"acknowledged_usd\":0,\"concurrency\":{},\"disabled_apis\":[],\"disabled_distributions\":[],\"estimate_usd\":null,\"month\":\"1970-01\",\"reason\":null,\"status\":\"armed\",\"tripped_at\":null}"
     )
     error_message = "The state parameter must start as the armed document the Lambda's tests pin (test_state.py TERRAFORM_INITIAL)."
   }
@@ -308,5 +315,28 @@ run "the_operator_role_only_invokes_the_switch" {
       Sid = "InvokeKillSwitch", Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = "arn:aws:lambda:eu-north-1:123456789012:function:cost-kill-switch"
     }]
     error_message = "baseline-kill-switch-operator may only invoke the kill switch."
+  }
+}
+
+run "custom_limits_reach_the_function" {
+  command = apply
+
+  variables {
+    kill_switch_max_distributions        = 3
+    kill_switch_max_apis                 = 2
+    kill_switch_max_functions            = 5
+    kill_switch_free_cloudfront_bytes    = 0
+    kill_switch_free_cloudfront_requests = 20000000
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.kill_switch.environment[0].variables["MAX_DISTRIBUTIONS"] == "3" &&
+      aws_lambda_function.kill_switch.environment[0].variables["MAX_APIS"] == "2" &&
+      aws_lambda_function.kill_switch.environment[0].variables["MAX_FUNCTIONS"] == "5" &&
+      aws_lambda_function.kill_switch.environment[0].variables["FREE_CLOUDFRONT_BYTES"] == "0" &&
+      aws_lambda_function.kill_switch.environment[0].variables["FREE_CLOUDFRONT_REQUESTS"] == "20000000"
+    )
+    error_message = "The limit and allowance variables must reach the function's environment."
   }
 }

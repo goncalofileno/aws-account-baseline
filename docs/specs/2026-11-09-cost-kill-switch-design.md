@@ -6,6 +6,11 @@
 - **Owner rule:** "Spending must stay visible, and a large bill must never happen, whatever the cause."
   The owner accepts about **USD 10 a month** as the worst normal month before the site takes itself offline.
 
+> **Amended 2026-11-11:** `docs/specs/2026-11-11-cost-hardening-design.md` (sections 3 to 6) adds
+> inventory limits (a trip before any metric is read), the HTTP API default endpoint disabled on a
+> trip (new state key `disabled_apis`), and the CloudFront free allowance in the estimate. The text
+> below is the original design.
+
 ## 1. Problem
 
 The account's existing cost guardrails only report: a USD 5 monthly budget (email) and Cost Anomaly

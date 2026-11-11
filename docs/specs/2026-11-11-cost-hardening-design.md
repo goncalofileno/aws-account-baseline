@@ -1,7 +1,7 @@
 # Cost and Takeover Hardening — Design
 
 - **Date:** 2026-11-11
-- **Status:** Draft, waiting for the owner's approval
+- **Status:** Approved (2026-11-11)
 - **Repos:** `aws-account-baseline` (most of it), `cv-site` (API catch-all route, pnpm cleanup)
 - **Source:** the read-only security and cost-exposure audit of 2026-11-11. Owner rule: never a large bill,
   whatever the cause.
@@ -57,7 +57,7 @@ metric, a `check` compares those counts with limits:
 | Lambda functions other than the switch | `kill_switch_max_functions = 1` | 1 |
 
 - Over a limit while armed: **trip**, with reason `inventory: <n> <kind> (limit <m>)`. No metric is read,
-  so a flood of resources can't make the run time out first.
+  so a flood of resources can't make the run time out first. The trip email reports the estimate as unknown.
 - The limits reach the Lambda as environment variables. Adding a legitimate resource (staging, PR
   previews) means raising the variable in the baseline first; the README says so.
 - The `>20 reads` cap stays as a second line.

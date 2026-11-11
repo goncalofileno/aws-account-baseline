@@ -67,6 +67,6 @@ jobs:
             echo '### Cost kill switch'
             echo
             echo '```json'
-            jq '{status, reason, tripped_at, estimate_usd, acknowledged_usd, distributions, functions}' response.json
+            jq '{status, reason, tripped_at, estimate_usd, acknowledged_usd, distributions, apis, functions}' response.json
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
