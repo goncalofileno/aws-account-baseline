@@ -78,9 +78,9 @@ run "the_function_is_configured_as_designed" {
       TRIGGER_TOPIC_ARN = "arn:aws:sns:eu-north-1:123456789012:cost-kill-switch-trigger"
       THRESHOLD_USD     = "5"
 
-      MAX_DISTRIBUTIONS        = "1"
-      MAX_APIS                 = "1"
-      MAX_FUNCTIONS            = "1"
+      MAX_DISTRIBUTIONS        = "2"
+      MAX_APIS                 = "2"
+      MAX_FUNCTIONS            = "2"
       FREE_CLOUDFRONT_BYTES    = "1000000000000"
       FREE_CLOUDFRONT_REQUESTS = "10000000"
     })

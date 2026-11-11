@@ -2,7 +2,7 @@
 #
 # A Lambda runs every minute, estimates this month's spend from CloudWatch metrics and, above the
 # threshold (or when the budget publishes to the trigger topic), disables every CloudFront
-# distribution, turns off every HTTP API's default endpoint and zeroes every other Lambda's
+# distribution, turns off every API Gateway v2 API's default endpoint and zeroes every other Lambda's
 # reserved concurrency. Resource counts above the kill_switch_max_* limits trip it too. Only the kill-switch
 # workflow (environment kill-switch) brings the site back. ARN locals live in roles-baseline.tf.
 

@@ -47,15 +47,18 @@ They are listed in cv-site `docs/PROGRESS.md` under "Waiting on Gonçalo".
 
 ## 4. H3: inventory limits in the kill switch (baseline)
 
-The switch already lists distributions, HTTP APIs and functions on every run. Before reading any
+The switch already lists distributions, API Gateway v2 APIs (HTTP and WebSocket) and functions on every run. Before reading any
 metric, a `check` compares those counts with limits:
 
 | Resource | Limit (Terraform variable, default) | Today |
 |---|---|---|
-| CloudFront distributions | `kill_switch_max_distributions = 1` | 1 |
-| HTTP APIs | `kill_switch_max_apis = 1` | 1 |
-| Lambda functions other than the switch | `kill_switch_max_functions = 1` | 1 |
+| CloudFront distributions | `kill_switch_max_distributions = 2` | 1 |
+| API Gateway v2 APIs | `kill_switch_max_apis = 2` | 1 |
+| Lambda functions other than the switch | `kill_switch_max_functions = 2` | 1 |
 
+- The default is 2, one above today's inventory: Pulumi replaces some resources create-before-delete,
+  and a limit of 1 would trip the switch (and take the site down) in the middle of a normal deploy.
+  Anything beyond that headroom needs the variable raised first.
 - Over a limit while armed: **trip**, with reason `inventory: <n> <kind> (limit <m>)`. No metric is read,
   so a flood of resources can't make the run time out first. The trip email reports the estimate as unknown.
 - The limits reach the Lambda as environment variables. Adding a legitimate resource (staging, PR
@@ -70,7 +73,7 @@ request then matches a route, so the stage throttle (2/5) applies and the reques
 and its reserved concurrency (2) bounds the work.
 
 **Baseline (kill switch):** on a trip, after the distributions and before the functions, set
-`DisableExecuteApiEndpoint = true` on every HTTP API whose endpoint is enabled, recording the API ID
+`DisableExecuteApiEndpoint = true` on every API Gateway v2 API (HTTP or WebSocket) whose endpoint is enabled, recording the API ID
 first; a rearm sets it back to false for the recorded ones. CloudFront reaches the API through that
 endpoint, which doesn't matter while tripped: the distribution is off.
 
@@ -86,7 +89,8 @@ endpoint, which doesn't matter while tripped: the distribution is off.
 CloudFront's always-free tier is 1 TB of data transfer out and 10 million requests a month. The
 estimate subtracts it before pricing:
 
-- `billable_bytes = max(0, cloudfront_bytes − 1e12)`, `billable_requests = max(0, cloudfront_requests − 10_000_000)`.
+- `billable_bytes = max(0, downloaded_bytes − 1e12) + uploaded_bytes` (the allowance is for data transfer
+  out, so uploads are priced in full), `billable_requests = max(0, cloudfront_requests − 10_000_000)`.
 - The allowances are Terraform variables (`kill_switch_free_cloudfront_bytes`,
   `kill_switch_free_cloudfront_requests`), so they can be lowered or set to 0. The free tier is shared
   across the AWS Organization; no other account uses CloudFront today.

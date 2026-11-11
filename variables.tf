@@ -77,9 +77,9 @@ variable "alert_email" {
 }
 
 variable "kill_switch_max_distributions" {
-  description = "Most CloudFront distributions the cost kill switch tolerates. More than this trips it before any metric is read, so raise it here before adding one."
+  description = "Most CloudFront distributions the cost kill switch tolerates. The default is one above today's inventory, so a create-before-delete replacement does not trip it. More than this trips it before any metric is read, so raise it here before adding one."
   type        = number
-  default     = 1
+  default     = 2
 
   validation {
     condition     = var.kill_switch_max_distributions >= 1 && var.kill_switch_max_distributions == floor(var.kill_switch_max_distributions)
@@ -88,9 +88,9 @@ variable "kill_switch_max_distributions" {
 }
 
 variable "kill_switch_max_apis" {
-  description = "Most HTTP APIs the cost kill switch tolerates. More than this trips it before any metric is read, so raise it here before adding one."
+  description = "Most API Gateway v2 APIs (HTTP and WebSocket) the cost kill switch tolerates. The default is one above today's inventory, so a create-before-delete replacement does not trip it. More than this trips it before any metric is read, so raise it here before adding one."
   type        = number
-  default     = 1
+  default     = 2
 
   validation {
     condition     = var.kill_switch_max_apis >= 1 && var.kill_switch_max_apis == floor(var.kill_switch_max_apis)
@@ -99,9 +99,9 @@ variable "kill_switch_max_apis" {
 }
 
 variable "kill_switch_max_functions" {
-  description = "Most Lambda functions, other than the kill switch itself, that the cost kill switch tolerates. More than this trips it before any metric is read, so raise it here before adding one."
+  description = "Most Lambda functions, other than the kill switch itself, that the cost kill switch tolerates. The default is one above today's inventory, so a create-before-delete replacement does not trip it. More than this trips it before any metric is read, so raise it here before adding one."
   type        = number
-  default     = 1
+  default     = 2
 
   validation {
     condition     = var.kill_switch_max_functions >= 1 && var.kill_switch_max_functions == floor(var.kill_switch_max_functions)

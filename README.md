@@ -132,21 +132,24 @@ switch acts on its own instead (design: `docs/specs/2026-11-09-cost-kill-switch-
   and again at USD 20.
 - **A trip:**
   - disables every CloudFront distribution;
-  - turns off the default `execute-api` endpoint of every HTTP API (the APIs are recorded first
-    and switched back on by a rearm);
+  - turns off the default `execute-api` endpoint of every API Gateway v2 API, HTTP and WebSocket
+    (the APIs are recorded first and switched back on by a rearm);
   - sets every other Lambda's reserved concurrency to 0;
   - records what it changed in `/cost-kill-switch/state`;
   - emails the owner through `cost-kill-switch-alerts`.
 
   While tripped, it re-applies that every minute. The cv-site deploy refuses to run.
 - **Inventory limits:** before reading any metric, a check counts the CloudFront distributions,
-  HTTP APIs and Lambda functions (other than the switch) and trips if one count is over its
-  limit (`kill_switch_max_distributions`, `kill_switch_max_apis`, `kill_switch_max_functions`,
-  each 1 by default). To add a legitimate resource (a staging stack, PR previews), raise the
-  variable in this repo and apply it first; otherwise the switch trips on the new resource.
+  API Gateway v2 APIs (HTTP and WebSocket) and Lambda functions (other than the switch) and trips
+  if one count is over its limit (`kill_switch_max_distributions`, `kill_switch_max_apis`,
+  `kill_switch_max_functions`, each 2 by default: one above today's single resource of each, so a
+  create-before-delete replacement by Pulumi doesn't take the site down). To add a legitimate
+  resource (a staging stack, PR previews) beyond that headroom, raise the variable in this repo
+  and apply it first; otherwise the switch trips on the new resource.
 - **Free allowance:** the estimate subtracts the CloudFront free allowance (1 TB of transfer and
   10 million requests a month, `kill_switch_free_cloudfront_bytes` and
-  `kill_switch_free_cloudfront_requests`) before pricing. The allowance is shared across the whole
+  `kill_switch_free_cloudfront_requests`) before pricing. The byte allowance covers downloaded
+  bytes only: uploaded bytes (`BytesUploaded`) are priced in full. The allowance is shared across the whole
   AWS Organization, so it is only free here while the other accounts don't use it; lower the
   variables if they do.
 - **Two alarms** email if the function errors for 5 minutes or stops running for 10.
@@ -171,6 +174,16 @@ Cost: USD 0, all inside the free tiers.
     --payload '{"action":"rearm","reason":"..."}' --profile personal --region eu-north-1 /dev/stdout
   ```
 
+- **The state document is capped** at 3800 bytes (an SSM Standard parameter holds 4096). If a trip
+  would outgrow it, the extra resources are still stopped but not recorded; the alert says how many,
+  and a rearm will not restore those (re-enable them by hand). Only reachable with dozens of
+  long-named resources.
+- **Rearm with the inventory still over a limit:** the next check trips again. Fix the inventory
+  or raise the limit first.
+- **Raise a limit before a change** that adds or replaces a distribution, API or function beyond
+  the headroom (2 each), or the switch trips on it.
+- **Rollback:** if this version is reverted after it wrote the state, remove the `disabled_apis`
+  key from `/cost-kill-switch/state` first; the older code rejects unknown keys.
 - **After a rearm,** DNS resolvers may keep answering "not found" for the site for a few minutes
   (negative caching) while the distribution comes back.
 - **If a rearm fails halfway**, the state stays `tripped` and the next minute disables things
