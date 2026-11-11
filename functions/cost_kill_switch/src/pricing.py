@@ -1,7 +1,8 @@
 """Conservative USD prices for the spend estimate (checked 2026-11-09).
 
 The prices are above the real ones on purpose (the top of the common CloudFront edge regions),
-and free tiers are ignored, so the estimate overstates spend.
+and free tiers are ignored (except the CloudFront allowance passed to estimate_usd), so the estimate
+overstates spend.
 """
 
 from dataclasses import dataclass
@@ -22,10 +23,13 @@ class Usage:
     lambda_gb_seconds: float = 0.0
 
 
-def estimate_usd(usage: Usage) -> float:
+def estimate_usd(usage: Usage, *, free_cloudfront_bytes: float = 0.0, free_cloudfront_requests: float = 0.0) -> float:
+    """The CloudFront free allowance (a monthly tier) comes off the CloudFront terms only, floored at zero."""
+    billable_bytes = max(0.0, usage.cloudfront_bytes - free_cloudfront_bytes)
+    billable_requests = max(0.0, usage.cloudfront_requests - free_cloudfront_requests)
     return (
-        usage.cloudfront_bytes / 1e9 * CLOUDFRONT_PER_GB
-        + usage.cloudfront_requests / 10_000 * CLOUDFRONT_PER_10K_REQUESTS
+        billable_bytes / 1e9 * CLOUDFRONT_PER_GB
+        + billable_requests / 10_000 * CLOUDFRONT_PER_10K_REQUESTS
         + usage.api_requests / 1e6 * API_GATEWAY_HTTP_PER_MILLION
         + usage.lambda_invocations / 1e6 * LAMBDA_PER_MILLION_INVOCATIONS
         + usage.lambda_gb_seconds * LAMBDA_PER_GB_SECOND

@@ -77,12 +77,22 @@ class Lambda:
 
 
 class ApiGateway:
-    def __init__(self, api_ids):
-        self.api_ids = api_ids
+    def __init__(self, apis):
+        # A list of API IDs (endpoint enabled) or a dict id -> DisableExecuteApiEndpoint.
+        self.disabled = dict(apis) if isinstance(apis, dict) else {a: False for a in apis}
+        self.updates = []
 
     def get_paginator(self, name):
         assert name == "get_apis"
-        return Paginator([{"Items": [{"ApiId": a} for a in self.api_ids]}])
+        # The field is absent from a response item when it was never set: represent False that way.
+        items = [{"ApiId": a, **({"DisableExecuteApiEndpoint": True} if d else {})} for a, d in self.disabled.items()]
+        return Paginator([{"Items": items}])
+
+    def update_api(self, ApiId, DisableExecuteApiEndpoint):
+        if ApiId not in self.disabled:
+            raise client_error("NotFoundException", "UpdateApi")
+        self.disabled[ApiId] = DisableExecuteApiEndpoint
+        self.updates.append((ApiId, DisableExecuteApiEndpoint))
 
 
 class CloudWatch:
@@ -133,7 +143,19 @@ class Sns:
 class World:
     """One fake account: distributions, functions, APIs, metric sums and the stored state."""
 
-    def __init__(self, *, dists=None, functions=None, apis=(), cf_sums=None, sums=None, state=None, cw_fail=False):
+    def __init__(
+        self,
+        *,
+        dists=None,
+        functions=None,
+        apis=(),
+        cf_sums=None,
+        sums=None,
+        state=None,
+        cw_fail=False,
+        limits=(100, 100, 100),  # distributions, APIs, functions: high so old scenarios never hit them
+        allowances=(0.0, 0.0),  # CloudFront bytes, requests
+    ):
         functions = {SELF: (128, 1), **(functions if functions is not None else {"cv-site-contact": (128, 2)})}
         self.cloudfront = CloudFront(dists if dists is not None else {"E1": True})
         self.lambda_ = Lambda(functions)
@@ -141,13 +163,14 @@ class World:
         self.cw = CloudWatch(sums or {}, fail=cw_fail)
         self.ssm = Ssm(st.dump(state if state is not None else st.armed("2026-11")))
         self.sns = Sns()
+        self.apigw = ApiGateway(apis)
         self.switch = KillSwitch(
             {
                 "cloudwatch_us_east_1": self.cw_us,
                 "cloudwatch": self.cw,
                 "cloudfront": self.cloudfront,
                 "lambda": self.lambda_,
-                "apigatewayv2": ApiGateway(list(apis)),
+                "apigatewayv2": self.apigw,
                 "ssm": self.ssm,
                 "sns": self.sns,
             },
@@ -156,4 +179,9 @@ class World:
             alerts_topic_arn=ALERTS,
             trigger_topic_arn=TRIGGER,
             threshold_usd=5.0,
+            max_distributions=limits[0],
+            max_apis=limits[1],
+            max_functions=limits[2],
+            free_cloudfront_bytes=allowances[0],
+            free_cloudfront_requests=allowances[1],
         )

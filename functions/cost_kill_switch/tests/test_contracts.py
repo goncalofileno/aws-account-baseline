@@ -34,6 +34,11 @@ def switch_with(**clients):
         alerts_topic_arn=ALERTS,
         trigger_topic_arn=TRIGGER,
         threshold_usd=5.0,
+        max_distributions=1,
+        max_apis=1,
+        max_functions=1,
+        free_cloudfront_bytes=0.0,
+        free_cloudfront_requests=0.0,
     )
 
 
@@ -84,6 +89,31 @@ def test_concurrency_calls():
         assert s.reserved_concurrency("cv-site-contact") == 2
         s.set_reserved_concurrency("cv-site-contact", 0)
         s.set_reserved_concurrency("other", None)
+        stub.assert_no_pending_responses()
+
+
+def test_api_endpoint_calls():
+    api = client("apigatewayv2")
+    with Stubber(api) as stub:
+        stub.add_response("update_api", {}, {"ApiId": "a1", "DisableExecuteApiEndpoint": True})
+        stub.add_response("update_api", {}, {"ApiId": "a1", "DisableExecuteApiEndpoint": False})
+        s = switch_with(apigatewayv2=api)
+        s.set_api_endpoint_disabled("a1", True)
+        s.set_api_endpoint_disabled("a1", False)
+        stub.assert_no_pending_responses()
+
+
+def test_listing_apis_reads_the_endpoint_flag_and_treats_a_missing_one_as_enabled():
+    api = client("apigatewayv2")
+    with Stubber(api) as stub:
+        stub.add_response(
+            "get_apis",
+            {"Items": [{"ApiId": "a1", "Name": "n", "ProtocolType": "HTTP", "RouteSelectionExpression": "x", "DisableExecuteApiEndpoint": True}, {"ApiId": "a2", "Name": "m", "ProtocolType": "HTTP", "RouteSelectionExpression": "x"}]},
+        )
+        assert switch_with(apigatewayv2=api).apis() == [
+            {"ApiId": "a1", "DisableExecuteApiEndpoint": True},
+            {"ApiId": "a2", "DisableExecuteApiEndpoint": False},
+        ]
         stub.assert_no_pending_responses()
 
 
