@@ -10,7 +10,7 @@ NOW = datetime(2026, 11, 9, 14, 30, 5, 123456, tzinfo=timezone.utc)
 
 # Exactly what kill-switch.tf creates: jsonencode() sorts keys and writes 0, not 0.0.
 TERRAFORM_INITIAL = (
-    '{"acknowledged_usd":0,"concurrency":{},"disabled_distributions":[],"estimate_usd":null,'
+    '{"acknowledged_usd":0,"concurrency":{},"disabled_apis":[],"disabled_distributions":[],"estimate_usd":null,'
     '"month":"1970-01","reason":null,"status":"armed","tripped_at":null}'
 )
 
@@ -18,6 +18,7 @@ TERRAFORM_INITIAL = (
 def a_tripped_state():
     s = st.tripped(st.armed("2026-11"), reason="drill", now=NOW, estimate=1.23456)
     s["disabled_distributions"] = ["E1"]
+    s["disabled_apis"] = ["api1"]
     s["concurrency"] = {"cv-site-contact": 2, "other": None}
     return s
 
@@ -37,6 +38,7 @@ def test_armed_has_exactly_the_documented_fields():
         "reason": None,
         "estimate_usd": None,
         "disabled_distributions": [],
+        "disabled_apis": [],
         "concurrency": {},
     }
 
@@ -95,11 +97,16 @@ def _with(**changes):
         _with(reason=5),
         _with(disabled_distributions="E1"),
         _with(disabled_distributions=[1]),
+        _with(disabled_apis="api1"),
+        _with(disabled_apis=[1]),
+        _with(disabled_apis=None),
+        _with(disabled_apis={"api1": True}),
         _with(concurrency=[]),
         _with(concurrency={"f": -1}),
         _with(concurrency={"f": True}),
         _with(concurrency={"f": 1.5}),
         {**st.armed("2026-11"), "disabled_distributions": ["E1"]},
+        {**st.armed("2026-11"), "disabled_apis": ["api1"]},
         {**st.armed("2026-11"), "concurrency": {"f": 1}},
         {**st.armed("2026-11"), "reason": "left over"},
         {**st.armed("2026-11"), "estimate_usd": 1.0},
@@ -108,6 +115,39 @@ def _with(**changes):
 def test_validate_rejects_malformed_documents(doc):
     with pytest.raises(st.StateError):
         st.validate(doc)
+
+
+# The document the live SSM parameter holds today: no disabled_apis.
+OLD_INITIAL = (
+    '{"acknowledged_usd":0,"concurrency":{},"disabled_distributions":[],"estimate_usd":null,'
+    '"month":"1970-01","reason":null,"status":"armed","tripped_at":null}'
+)
+
+
+def test_a_stored_document_without_disabled_apis_parses_as_empty_and_dumps_with_the_key():
+    s = st.parse(OLD_INITIAL)
+    assert s["disabled_apis"] == []
+    assert st.dump(s) == TERRAFORM_INITIAL
+
+
+def test_an_old_tripped_document_parses_too():
+    doc = {k: v for k, v in a_tripped_state().items() if k != "disabled_apis"}
+    s = st.parse(json.dumps(doc))
+    assert s["disabled_apis"] == [] and s["disabled_distributions"] == ["E1"]
+
+
+def test_validate_itself_still_requires_the_key():
+    with pytest.raises(st.StateError):
+        st.validate({k: v for k, v in st.armed("2026-11").items() if k != "disabled_apis"})
+
+
+def test_parse_does_not_tolerate_other_missing_keys_or_a_non_object():
+    doc = json.loads(OLD_INITIAL)
+    del doc["concurrency"]
+    with pytest.raises(st.StateError):
+        st.parse(json.dumps(doc))
+    with pytest.raises(st.StateError):
+        st.parse("[]")
 
 
 def test_parse_rejects_text_that_is_not_json():

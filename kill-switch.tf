@@ -2,7 +2,8 @@
 #
 # A Lambda runs every minute, estimates this month's spend from CloudWatch metrics and, above the
 # threshold (or when the budget publishes to the trigger topic), disables every CloudFront
-# distribution and zeroes every other Lambda's reserved concurrency. Only the kill-switch
+# distribution, turns off every API Gateway v2 API's default endpoint and zeroes every other Lambda's
+# reserved concurrency. Resource counts above the kill_switch_max_* limits trip it too. Only the kill-switch
 # workflow (environment kill-switch) brings the site back. ARN locals live in roles-baseline.tf.
 
 locals {
@@ -18,6 +19,7 @@ locals {
     reason                 = null
     estimate_usd           = null
     disabled_distributions = []
+    disabled_apis          = []
     concurrency            = {}
   })
 }
@@ -63,6 +65,8 @@ resource "aws_iam_role_policy" "kill_switch" {
       { Sid = "ListDistributions", Effect = "Allow", Action = ["cloudfront:ListDistributions"], Resource = "*" },
       { Sid = "SwitchDistributions", Effect = "Allow", Action = ["cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution"], Resource = "arn:aws:cloudfront::${local.account_id}:distribution/*" },
       { Sid = "ListApis", Effect = "Allow", Action = ["apigateway:GET"], Resource = "arn:aws:apigateway:${var.region}::/apis" },
+      # UpdateApi (PATCH) sets DisableExecuteApiEndpoint on a trip; GET on a single API isn't granted.
+      { Sid = "SwitchApiEndpoints", Effect = "Allow", Action = ["apigateway:PATCH"], Resource = "arn:aws:apigateway:${var.region}::/apis/*" },
       { Sid = "ListFunctions", Effect = "Allow", Action = ["lambda:ListFunctions"], Resource = "*" },
       { Sid = "FunctionConcurrency", Effect = "Allow", Action = ["lambda:GetFunctionConcurrency", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency"], Resource = "arn:aws:lambda:${var.region}:${local.account_id}:function:*" },
       { Sid = "NotItself", Effect = "Deny", Action = ["lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency"], Resource = local.kill_switch_function_arn },
@@ -96,6 +100,12 @@ resource "aws_lambda_function" "kill_switch" {
       ALERTS_TOPIC_ARN  = aws_sns_topic.kill_switch_alerts.arn
       TRIGGER_TOPIC_ARN = aws_sns_topic.kill_switch_trigger.arn
       THRESHOLD_USD     = tostring(local.kill_switch_threshold_usd)
+      # format("%d") keeps 1e12 a plain decimal string, which the Lambda parses as an integer.
+      MAX_DISTRIBUTIONS        = format("%d", var.kill_switch_max_distributions)
+      MAX_APIS                 = format("%d", var.kill_switch_max_apis)
+      MAX_FUNCTIONS            = format("%d", var.kill_switch_max_functions)
+      FREE_CLOUDFRONT_BYTES    = format("%d", var.kill_switch_free_cloudfront_bytes)
+      FREE_CLOUDFRONT_REQUESTS = format("%d", var.kill_switch_free_cloudfront_requests)
     }
   }
 

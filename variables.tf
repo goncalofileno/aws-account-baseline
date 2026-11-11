@@ -75,3 +75,58 @@ variable "alert_email" {
     error_message = "alert_email must be a valid email address."
   }
 }
+
+variable "kill_switch_max_distributions" {
+  description = "Most CloudFront distributions the cost kill switch tolerates. The default is one above today's inventory, so a create-before-delete replacement does not trip it. More than this trips it before any metric is read, so raise it here before adding one."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.kill_switch_max_distributions >= 1 && var.kill_switch_max_distributions == floor(var.kill_switch_max_distributions)
+    error_message = "kill_switch_max_distributions must be a whole number of at least 1."
+  }
+}
+
+variable "kill_switch_max_apis" {
+  description = "Most API Gateway v2 APIs (HTTP and WebSocket) the cost kill switch tolerates. The default is one above today's inventory, so a create-before-delete replacement does not trip it. More than this trips it before any metric is read, so raise it here before adding one."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.kill_switch_max_apis >= 1 && var.kill_switch_max_apis == floor(var.kill_switch_max_apis)
+    error_message = "kill_switch_max_apis must be a whole number of at least 1."
+  }
+}
+
+variable "kill_switch_max_functions" {
+  description = "Most Lambda functions, other than the kill switch itself, that the cost kill switch tolerates. The default is one above today's inventory, so a create-before-delete replacement does not trip it. More than this trips it before any metric is read, so raise it here before adding one."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.kill_switch_max_functions >= 1 && var.kill_switch_max_functions == floor(var.kill_switch_max_functions)
+    error_message = "kill_switch_max_functions must be a whole number of at least 1."
+  }
+}
+
+variable "kill_switch_free_cloudfront_bytes" {
+  description = "Bytes of CloudFront data transfer per month the cost kill switch treats as free (the Organization-wide free allowance, 1 TB). Raising it makes the switch trip later; 0 counts every byte."
+  type        = number
+  default     = 1000000000000
+
+  validation {
+    condition     = var.kill_switch_free_cloudfront_bytes >= 0 && var.kill_switch_free_cloudfront_bytes == floor(var.kill_switch_free_cloudfront_bytes)
+    error_message = "kill_switch_free_cloudfront_bytes must be a whole number of at least 0."
+  }
+}
+
+variable "kill_switch_free_cloudfront_requests" {
+  description = "CloudFront requests per month the cost kill switch treats as free (the Organization-wide free allowance, 10 million). Raising it makes the switch trip later; 0 counts every request."
+  type        = number
+  default     = 10000000
+
+  validation {
+    condition     = var.kill_switch_free_cloudfront_requests >= 0 && var.kill_switch_free_cloudfront_requests == floor(var.kill_switch_free_cloudfront_requests)
+    error_message = "kill_switch_free_cloudfront_requests must be a whole number of at least 0."
+  }
+}

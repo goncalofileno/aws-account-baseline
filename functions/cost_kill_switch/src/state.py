@@ -12,7 +12,7 @@ from datetime import datetime
 ARMED = "armed"
 TRIPPED = "tripped"
 KEYS = frozenset(
-    {"status", "month", "acknowledged_usd", "tripped_at", "reason", "estimate_usd", "disabled_distributions", "concurrency"}
+    {"status", "month", "acknowledged_usd", "tripped_at", "reason", "estimate_usd", "disabled_distributions", "disabled_apis", "concurrency"}
 )
 _MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -34,6 +34,7 @@ def armed(month: str, acknowledged: float = 0.0) -> dict:
         "reason": None,
         "estimate_usd": None,
         "disabled_distributions": [],
+        "disabled_apis": [],
         "concurrency": {},
     }
 
@@ -66,13 +67,16 @@ def validate(doc) -> dict:
     dists = doc["disabled_distributions"]
     if not isinstance(dists, list) or not all(isinstance(d, str) for d in dists):
         raise StateError("disabled_distributions must be a list of IDs")
+    apis = doc["disabled_apis"]
+    if not isinstance(apis, list) or not all(isinstance(a, str) for a in apis):
+        raise StateError("disabled_apis must be a list of IDs")
     conc = doc["concurrency"]
     if not isinstance(conc, dict) or not all(
         isinstance(k, str) and (v is None or (isinstance(v, int) and not isinstance(v, bool) and v >= 0))
         for k, v in conc.items()
     ):
         raise StateError("concurrency must map function names to an int >= 0 or null")
-    if doc["status"] == ARMED and (dists or conc or doc["tripped_at"] or doc["reason"] or doc["estimate_usd"] is not None):
+    if doc["status"] == ARMED and (dists or apis or conc or doc["tripped_at"] or doc["reason"] or doc["estimate_usd"] is not None):
         raise StateError("an armed state carries no trip details")
     if doc["status"] == TRIPPED and not all(isinstance(doc[k], str) and doc[k] for k in ("reason", "tripped_at")):
         raise StateError("a tripped state needs a reason and a trip time")
@@ -84,6 +88,10 @@ def parse(text: str) -> dict:
         doc = json.loads(text)
     except json.JSONDecodeError as e:
         raise StateError("state is not JSON") from e
+    # A document stored before disabled_apis existed counts as having none. This is the only
+    # tolerance: validate() itself still demands the exact key set.
+    if isinstance(doc, dict) and "disabled_apis" not in doc:
+        doc = {**doc, "disabled_apis": []}
     return validate(doc)
 
 

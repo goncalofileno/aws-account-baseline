@@ -11,6 +11,13 @@ from fakes import ALERTS, PARAM, SELF, TRIGGER, World
 
 NOW = datetime(2026, 11, 9, 14, 30, tzinfo=timezone.utc)
 FLOOD = {("AWS/CloudFront", "BytesDownloaded", "E1"): 50e9}  # 50 GB -> USD 6.00
+NEW_ENV = {
+    "MAX_DISTRIBUTIONS": "1",
+    "MAX_APIS": "2",
+    "MAX_FUNCTIONS": "3",
+    "FREE_CLOUDFRONT_BYTES": "1000000000000",
+    "FREE_CLOUDFRONT_REQUESTS": "10000000",
+}
 QUIET = {("AWS/CloudFront", "BytesDownloaded", "E1"): 1e9}  # 1 GB -> USD 0.12
 
 
@@ -50,6 +57,7 @@ def test_check_over_the_threshold_trips_records_first_and_alerts_once():
         "estimate_usd": 6.0,
         "acknowledged_usd": 0.0,
         "distributions": 1,
+        "apis": 0,
         "functions": 2,
     }
 
@@ -195,7 +203,8 @@ def test_usage_reads_every_resource_with_the_right_dimensions():
     )
     usage = w.switch.usage(NOW)
     assert usage == handler.Usage(
-        cloudfront_bytes=4e9, cloudfront_requests=10_000, api_requests=1e6, lambda_invocations=1e6, lambda_gb_seconds=2.0
+        cloudfront_bytes_down=3e9,
+        cloudfront_bytes_up=1e9, cloudfront_requests=10_000, api_requests=1e6, lambda_invocations=1e6, lambda_gb_seconds=2.0
     )
     cf = w.cw_us.calls[0]
     assert cf["Dimensions"] == [{"Name": "DistributionId", "Value": "E1"}, {"Name": "Region", "Value": "Global"}]
@@ -219,11 +228,16 @@ def test_lambda_handler_wires_the_environment(monkeypatch):
     monkeypatch.setenv("ALERTS_TOPIC_ARN", ALERTS)
     monkeypatch.setenv("TRIGGER_TOPIC_ARN", TRIGGER)
     monkeypatch.setenv("THRESHOLD_USD", "5")
+    for k, v in NEW_ENV.items():
+        monkeypatch.setenv(k, v)
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", SELF)
     monkeypatch.setattr(handler, "make_clients", lambda: w.switch.c)
     monkeypatch.setattr(handler, "_SWITCH", None)
     assert handler.lambda_handler({"action": "status"}, None)["status"] == "armed"
     assert handler._SWITCH.threshold_usd == 5.0
+    sw = handler._SWITCH
+    assert (sw.max_distributions, sw.max_apis, sw.max_functions) == (1, 2, 3)
+    assert (sw.free_cloudfront_bytes, sw.free_cloudfront_requests) == (1e12, 1e7)
 
 
 def test_a_distribution_and_a_function_are_recorded_before_they_are_changed():
@@ -297,6 +311,8 @@ def _env(monkeypatch, clients):
     monkeypatch.setenv("ALERTS_TOPIC_ARN", ALERTS)
     monkeypatch.setenv("TRIGGER_TOPIC_ARN", TRIGGER)
     monkeypatch.setenv("THRESHOLD_USD", "5")
+    for k, v in NEW_ENV.items():
+        monkeypatch.setenv(k, v)
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", SELF)
     monkeypatch.setattr(handler, "make_clients", lambda: clients)
     monkeypatch.setattr(handler, "_SWITCH", None)
@@ -440,6 +456,7 @@ def test_more_than_20_reads_in_a_run_raises_after_acting():
 def test_the_read_cap_error_leaves_the_lambda_sanitised(monkeypatch):
     w = World(dists={f"E{i}": True for i in range(7)}, cf_sums=QUIET)
     _env(monkeypatch, w.switch.c)
+    monkeypatch.setenv("MAX_DISTRIBUTIONS", "100")  # 7 distributions must not be an inventory trip here
     with pytest.raises(RuntimeError) as info:
         handler.lambda_handler({"action": "check"}, None)
     assert str(info.value) == "kill switch failed: RuntimeError"
@@ -467,3 +484,447 @@ def test_a_partial_enforcement_failure_keeps_its_records_and_rearm_restores_them
     w.switch.run({"action": "rearm", "reason": "test"}, NOW)
     assert w.cloudfront.enabled == {"E1": True, "E2": True}
     assert w.lambda_.reserved["cv-site-contact"] == 2
+
+
+# --- hardening: HTTP API endpoint, inventory limits, CloudFront allowance
+
+
+def _api_listing_call_counts(w):
+    counts = {"cloudfront": 0, "lambda": 0, "apigatewayv2": 0}
+    for key in counts:
+        client = w.switch.c[key]
+        original = client.get_paginator
+
+        def counted(name, _o=original, _k=key):
+            counts[_k] += 1
+            return _o(name)
+
+        client.get_paginator = counted
+    return counts
+
+
+def test_a_trip_disables_the_api_endpoint_and_a_rearm_restores_it():
+    w = World(apis=["api1"], cf_sums=FLOOD)
+    result = w.switch.run({"action": "check"}, NOW)
+    assert w.apigw.disabled == {"api1": True}
+    assert w.ssm.state["disabled_apis"] == ["api1"]
+    assert result["apis"] == 1
+    assert "api1" not in json.dumps(result)
+    assert "HTTP API" in w.sns.published[0][1]
+    assert "api1" not in w.sns.published[0][1]
+    result = w.switch.run({"action": "rearm", "reason": "over"}, NOW)
+    assert w.apigw.disabled == {"api1": False}
+    assert w.ssm.state["disabled_apis"] == []
+    assert result["apis"] == 0
+    body = w.sns.published[1][1]
+    assert "1 distribution(s)" in body and "1 HTTP API(s)" in body and "1 function(s)" in body
+    assert "api1" not in body
+
+
+def test_enforcement_goes_distributions_then_apis_then_functions():
+    w = World(apis=["api1"], cf_sums=FLOOD)
+    order = []
+    cf_update, api_update, put = w.cloudfront.update_distribution, w.apigw.update_api, w.lambda_.put_function_concurrency
+    w.cloudfront.update_distribution = lambda **kw: order.append("cf") or cf_update(**kw)
+    w.apigw.update_api = lambda **kw: order.append("api") or api_update(**kw)
+    w.lambda_.put_function_concurrency = lambda **kw: order.append("fn") or put(**kw)
+    w.switch.run({"action": "check"}, NOW)
+    assert order == ["cf", "api", "fn"]
+
+
+def test_an_api_is_recorded_before_its_endpoint_is_changed():
+    w = World(apis=["api1"], cf_sums=FLOOD)
+    seen = []
+    update = w.apigw.update_api
+
+    def checked(ApiId, DisableExecuteApiEndpoint):
+        seen.append(ApiId in w.ssm.state["disabled_apis"])
+        update(ApiId, DisableExecuteApiEndpoint)
+
+    w.apigw.update_api = checked
+    w.switch.run({"action": "check"}, NOW)
+    assert seen == [True]
+
+
+def test_an_api_whose_endpoint_is_already_disabled_is_not_recorded_or_touched():
+    w = World(apis={"api1": True, "api2": False}, cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    assert w.ssm.state["disabled_apis"] == ["api2"]
+    assert w.apigw.updates == [("api2", True)]
+    w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    assert w.apigw.disabled == {"api1": True, "api2": False}  # api1 was never ours to restore
+
+
+def test_while_tripped_a_re_enabled_endpoint_is_disabled_again_without_a_duplicate_record():
+    w = World(apis=["api1"], cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    w.apigw.disabled["api1"] = False  # re-enabled behind the switch's back
+    w.apigw.disabled["api9"] = False  # a new API
+    w.switch.run({"action": "check"}, NOW)
+    assert w.apigw.disabled == {"api1": True, "api9": True}
+    assert w.ssm.state["disabled_apis"] == ["api1", "api9"]
+    assert len(w.sns.published) == 1
+
+
+def test_rearm_restores_only_recorded_apis_and_skips_a_missing_one():
+    s = st.tripped(st.armed("2026-11"), reason="drill", now=NOW, estimate=0.0)
+    s["disabled_apis"] = ["gone", "api1"]
+    w = World(state=s, apis={"api1": True, "other": True})
+    result = w.switch.run({"action": "rearm", "reason": "after drill"}, NOW)
+    assert result["status"] == "armed"
+    assert w.apigw.disabled == {"api1": False, "other": True}
+    assert w.ssm.state["disabled_apis"] == []
+
+
+def test_rearm_does_not_swallow_other_api_errors_and_stays_tripped():
+    s = st.tripped(st.armed("2026-11"), reason="drill", now=NOW, estimate=0.0)
+    s["disabled_apis"] = ["api1"]
+    w = World(state=s, apis={"api1": True})
+    w.apigw.update_api = lambda **_: (_ for _ in ()).throw(client_error_("UpdateApi"))
+    with pytest.raises(ClientError):
+        w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    assert w.ssm.state["status"] == "tripped" and w.ssm.state["disabled_apis"] == ["api1"]
+
+
+def test_a_partial_api_enforcement_failure_keeps_its_records_and_rearm_restores_them():
+    w = World(apis=["api1", "api2"], cf_sums=QUIET)
+    ok = w.apigw.update_api
+    fail = True
+
+    def flaky(ApiId, DisableExecuteApiEndpoint):
+        if ApiId == "api2" and fail:
+            raise client_error_("UpdateApi")
+        ok(ApiId, DisableExecuteApiEndpoint)
+
+    w.apigw.update_api = flaky
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.ssm.state["disabled_apis"] == ["api1", "api2"]
+    assert w.lambda_.reserved["cv-site-contact"] == 0  # the later phase still ran
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    fail = False
+    w.switch.run({"action": "rearm", "reason": "test"}, NOW)
+    assert w.apigw.disabled == {"api1": False, "api2": False}
+
+
+INVENTORY_CASES = [
+    ({"dists": {"E1": True, "E2": True}}, (1, 100, 100), "inventory: 2 distributions (limit 1)"),
+    ({"apis": ["a1", "a2"]}, (100, 1, 100), "inventory: 2 HTTP APIs (limit 1)"),
+    ({"functions": {"f1": (128, 2), "f2": (128, None)}}, (100, 100, 1), "inventory: 2 functions (limit 1)"),
+]
+
+
+def _inventory_world(kwargs, limits, cf_sums=FLOOD, **extra):
+    return World(**{"apis": ["a0"], **kwargs}, limits=limits, cf_sums=cf_sums, **extra)
+
+
+def _fully_enforced(w):
+    return (
+        not any(w.cloudfront.enabled.values())
+        and all(w.apigw.disabled.values())
+        and all(r == 0 for n, r in w.lambda_.reserved.items() if n != SELF)
+    )
+
+
+@pytest.mark.parametrize("kwargs, limits, reason", INVENTORY_CASES)
+def test_an_inventory_over_its_limit_trips_and_enforces_without_any_metric_read(kwargs, limits, reason):
+    w = _inventory_world(kwargs, limits, cw_fail=True)  # a read would raise: enforcement must not wait on one
+    result = w.switch.run({"action": "check"}, NOW)
+    assert w.ssm.state["status"] == "tripped"
+    assert w.ssm.state["reason"] == reason
+    assert result["reason"] == reason and result["estimate_usd"] is None
+    assert w.cw_us.calls == [] and w.cw.calls == []
+    assert _fully_enforced(w)
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    assert reason in w.sns.published[0][1]
+    assert w.ssm.writes[0]["status"] == "tripped" and w.ssm.writes[0]["disabled_distributions"] == []
+
+
+@pytest.mark.parametrize("kwargs, limits, reason", INVENTORY_CASES)
+def test_an_inventory_trip_makes_no_metric_read_at_all_and_still_emails(kwargs, limits, reason):
+    w = _inventory_world(kwargs, limits)  # metrics are readable and a flood is there: still not read
+    result = w.switch.run({"action": "check"}, NOW)
+    assert w.cw_us.calls == [] and w.cw.calls == []
+    assert result["status"] == "tripped" and result["estimate_usd"] is None
+    assert _fully_enforced(w)
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    body = w.sns.published[0][1]
+    assert reason in body and "unknown" in body and "inventory" in body.split("Estimated spend")[1]
+
+
+@pytest.mark.parametrize("kwargs, limits, reason", INVENTORY_CASES)
+def test_exactly_at_the_limit_does_not_trip(kwargs, limits, reason):
+    at_limit = tuple(2 if lim == 1 else lim for lim in limits)  # the kind with 2 items now has limit 2
+    w = _inventory_world(kwargs, at_limit, cf_sums=QUIET)
+    result = w.switch.run({"action": "check"}, NOW)
+    assert result["status"] == "armed"
+    assert w.ssm.writes == [] and w.sns.published == []
+
+
+def test_the_first_kind_over_its_limit_is_reported_in_order_distributions_apis_functions():
+    w = World(
+        dists={"E1": True, "E2": True},
+        apis=["a1", "a2"],
+        functions={"f1": (128, 2), "f2": (128, 2)},
+        limits=(1, 1, 1),
+    )
+    w.switch.run({"action": "check"}, NOW)
+    assert w.ssm.state["reason"] == "inventory: 2 distributions (limit 1)"
+    w = World(apis=["a1", "a2"], functions={"f1": (128, 2), "f2": (128, 2)}, limits=(1, 1, 1))
+    w.switch.run({"action": "check"}, NOW)
+    assert w.ssm.state["reason"] == "inventory: 2 HTTP APIs (limit 1)"
+
+
+def test_the_inventory_counts_functions_other_than_the_switch():
+    w = World(functions={"cv-site-contact": (128, 2)}, limits=(1, 1, 1), cf_sums=QUIET)  # SELF + 1 function
+    assert w.switch.run({"action": "check"}, NOW)["status"] == "armed"
+
+
+def test_an_armed_check_lists_each_kind_once_and_reuses_the_listings_for_the_metric_reads():
+    w = World(apis=["api1"], cf_sums=QUIET)
+    counts = _api_listing_call_counts(w)
+    w.switch.run({"action": "check"}, NOW)
+    assert counts == {"cloudfront": 1, "lambda": 1, "apigatewayv2": 1}
+    assert len(w.cw_us.calls) == 3 and len(w.cw.calls) == 3
+
+
+def test_a_failing_listing_while_armed_raises_and_changes_nothing():
+    w = World(cf_sums=FLOOD)
+
+    def broken(name):
+        raise client_error_("ListDistributions")
+
+    w.cloudfront.get_paginator = broken
+    with pytest.raises(ClientError):
+        w.switch.run({"action": "check"}, NOW)
+    assert w.ssm.writes == [] and w.lambda_.reserved["cv-site-contact"] == 2
+
+
+def test_while_tripped_the_inventory_check_does_not_run():
+    s = st.tripped(st.armed("2026-11"), reason="drill", now=NOW, estimate=1.0)
+    w = World(state=s, dists={"E1": True, "E2": True}, apis=["a1", "a2"], limits=(1, 1, 1))
+    result = w.switch.run({"action": "check"}, NOW)
+    assert result["reason"] == "drill"  # not replaced by an inventory reason
+    assert w.sns.published == []
+    assert _fully_enforced(w)  # enforcement still ran, as it does for any tripped check
+
+
+def test_a_status_never_trips_on_inventory():
+    w = World(dists={"E1": True, "E2": True}, limits=(1, 1, 1), cf_sums=QUIET)
+    assert w.switch.run({"action": "status"}, NOW)["status"] == "armed"
+
+
+# CloudFront free allowance: USD 6.00 of bytes is 50 GB; a 1 TB allowance covers it.
+def test_a_flood_under_the_allowance_does_not_trip_when_the_allowance_is_configured():
+    without = World(cf_sums=FLOOD)
+    without.switch.run({"action": "check"}, NOW)
+    assert without.ssm.state["status"] == "tripped"
+    w = World(cf_sums=FLOOD, allowances=(1e12, 1e7))
+    result = w.switch.run({"action": "check"}, NOW)
+    assert result["status"] == "armed" and result["estimate_usd"] == 0.0
+    assert w.sns.published == []
+
+
+def test_a_flood_over_the_allowance_trips_on_the_billable_part_only():
+    w = World(cf_sums={("AWS/CloudFront", "BytesDownloaded", "E1"): 1e12 + 50e9}, allowances=(1e12, 1e7))
+    result = w.switch.run({"action": "check"}, NOW)
+    assert result["status"] == "tripped" and result["estimate_usd"] == pytest.approx(6.0)
+    assert w.ssm.state["reason"] == "estimated spend USD 6.00 this month is over the USD 5 threshold"
+
+
+def test_the_allowance_applies_to_status_rearm_acknowledgement_and_the_email():
+    w = World(cf_sums={("AWS/CloudFront", "BytesDownloaded", "E1"): 1e12 + 50e9}, allowances=(1e12, 1e7))
+    w.switch.run({"action": "check"}, NOW)
+    assert w.switch.run({"action": "status"}, NOW)["estimate_usd"] == pytest.approx(6.0)
+    w.switch.run({"action": "rearm", "reason": "ok"}, NOW)
+    assert w.ssm.state["acknowledged_usd"] == pytest.approx(6.0)
+    assert "USD 6.00" in w.sns.published[0][1]
+
+
+def test_a_manual_trip_estimate_uses_the_allowance():
+    w = World(cf_sums=FLOOD, allowances=(1e12, 1e7))
+    assert w.switch.run({"action": "trip", "reason": "drill"}, NOW)["estimate_usd"] == 0.0
+
+
+def test_the_trip_email_mentions_the_api_endpoints():
+    w = World(cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    assert "HTTP API" in w.sns.published[0][1]
+
+
+def test_a_missing_new_environment_variable_fails_sanitised(monkeypatch):
+    for missing in NEW_ENV:
+        _env(monkeypatch, World().switch.c)
+        monkeypatch.delenv(missing)
+        with pytest.raises(RuntimeError) as info:
+            handler.lambda_handler({"action": "status"}, None)
+        assert str(info.value) == "kill switch failed: KeyError"
+
+
+# --- whole-branch fix round
+
+
+def _broken(code="Throttling", op="List"):
+    def raiser(*_, **__):
+        raise client_error_(op)
+
+    return raiser
+
+
+def test_a_failing_api_listing_does_not_stop_distributions_or_functions():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    w.apigw.get_paginator = _broken()
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.cloudfront.enabled["E1"] is False
+    assert w.lambda_.reserved["cv-site-contact"] == 0
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_a_failing_distribution_listing_does_not_stop_apis_or_functions():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    w.cloudfront.get_paginator = _broken()
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.apigw.disabled["a1"] is True
+    assert w.lambda_.reserved["cv-site-contact"] == 0
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+
+
+def test_a_failing_function_listing_does_not_stop_distributions_or_apis():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    w.lambda_.get_paginator = _broken()
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.apigw.disabled["a1"] is True and w.cloudfront.enabled["E1"] is False
+    assert len(w.sns.published) == 1
+
+
+def test_a_failed_record_save_leaves_that_resource_unchanged_and_the_other_kinds_go_on():
+    w = World(apis=["a1"], cf_sums=QUIET)
+    put = w.ssm.put_parameter
+
+    def flaky(Name, Value, Type, Overwrite):
+        if '"disabled_distributions":["E1"]' in Value:
+            raise client_error_("PutParameter")
+        put(Name, Value, Type, Overwrite)
+
+    w.ssm.put_parameter = flaky
+    with pytest.raises(RuntimeError, match="1 enforcement action"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.cloudfront.enabled["E1"] is True  # not recorded, so not changed
+    assert w.apigw.disabled["a1"] is True and w.lambda_.reserved["cv-site-contact"] == 0
+    assert w.ssm.state["disabled_distributions"] == []
+    assert len(w.sns.published) == 1
+
+
+def _long_functions(n=150):
+    return {f"function-with-a-fairly-long-name-{i:03d}-{'x' * 20}"[:53].ljust(53, "y"): (128, 2) for i in range(n)}
+
+
+def test_a_full_state_still_stops_every_resource_and_says_so(monkeypatch):
+    funcs = _long_functions()
+    assert len(funcs) == 150 and all(len(n) == 53 for n in funcs)
+    w = World(functions=funcs, limits=(100, 100, 200), cw_fail=True)
+    result = w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert all(r == 0 for n, r in w.lambda_.reserved.items() if n != SELF)
+    assert max(w.ssm.sizes) <= handler.STATE_MAX_BYTES
+    s = w.ssm.state
+    recorded = s["concurrency"]
+    assert 0 < len(recorded) < 150 and all(v == 2 for v in recorded.values())
+    unrecorded = 150 - len(recorded)
+    assert f"{unrecorded} resource(s) were stopped without a record because the state is full" in w.sns.published[0][1]
+    assert "a rearm will not restore them" in w.sns.published[0][1]
+    assert result["status"] == "tripped"
+    # A rearm restores exactly the recorded ones (metrics readable again; the read cap is not the subject here).
+    monkeypatch.setattr(handler, "READS_WARNING", 10_000)
+    w.cw_us.fail = w.cw.fail = False
+    w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    restored = {n for n, r in w.lambda_.reserved.items() if r == 2}
+    assert restored == set(recorded)
+
+
+def test_a_full_state_does_not_raise_for_unrecorded_alone_and_a_later_run_is_quiet():
+    w = World(functions=_long_functions(), limits=(100, 100, 200), cw_fail=True)
+    w.switch.run({"action": "trip", "reason": "drill"}, NOW)  # no raise
+    before = len(w.sns.published)
+    w.switch.run({"action": "check"}, NOW)
+    assert len(w.sns.published) == before
+
+
+def test_the_overflow_check_applies_to_distributions_and_apis_too(monkeypatch):
+    monkeypatch.setattr(handler, "STATE_MAX_BYTES", 400)
+    w = World(dists={f"E{'D' * 30}{i}": True for i in range(20)}, apis=[f"api-{'a' * 30}{i}" for i in range(20)], functions={}, limits=(100, 100, 100), cw_fail=True)
+    w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert not any(w.cloudfront.enabled.values()) and all(w.apigw.disabled.values())
+    assert max(w.ssm.sizes) <= 400
+    assert "stopped without a record" in w.sns.published[0][1]
+
+
+class Clock:
+    def __init__(self, ok_calls):
+        self.calls, self.ok_calls = 0, ok_calls
+
+    def __call__(self):
+        self.calls += 1
+        return 100_000 if self.calls <= self.ok_calls else 5_000
+
+
+def test_enforcement_stops_when_time_runs_out_then_the_alert_goes_out_and_the_next_run_finishes():
+    funcs = {f"f{i}": (128, 2) for i in range(5)}
+    w = World(functions=funcs, cf_sums=QUIET)
+    with pytest.raises(RuntimeError, match="out of time; the next run continues"):
+        w.switch.run({"action": "trip", "reason": "drill"}, NOW, remaining_ms=Clock(3))
+    s = w.ssm.state
+    assert w.cloudfront.enabled["E1"] is False
+    assert [n for n, r in w.lambda_.reserved.items() if n != SELF and r == 0] == ["f0", "f1"]
+    assert sorted(s["concurrency"]) == ["f0", "f1"] and s["disabled_distributions"] == ["E1"]
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    assert w.cw_us.calls == [] and w.cw.calls == []  # no slow estimate between enforcement and the alert
+    w.switch.run({"action": "check"}, NOW)  # the next minute, with time
+    assert all(r == 0 for n, r in w.lambda_.reserved.items() if n != SELF)
+    assert sorted(w.ssm.state["concurrency"]) == ["f0", "f1", "f2", "f3", "f4"]
+    assert len(w.sns.published) == 1
+
+
+def test_lambda_handler_passes_the_remaining_time_lazily(monkeypatch):
+    from types import SimpleNamespace
+
+    w = World(functions={"f0": (128, 2)}, cf_sums=QUIET)
+    _env(monkeypatch, w.switch.c)
+    ctx = SimpleNamespace(get_remaining_time_in_millis=lambda: 1_000)
+    with pytest.raises(RuntimeError) as info:
+        handler.lambda_handler({"action": "trip", "reason": "drill"}, ctx)
+    assert str(info.value) == "kill switch failed: RuntimeError"
+    assert w.cloudfront.enabled["E1"] is True and w.lambda_.reserved["f0"] == 2  # out of time: nothing changed
+    assert w.ssm.state["status"] == "tripped" and len(w.sns.published) == 1
+
+
+def test_a_manual_trip_over_an_inventory_limit_reads_no_metrics():
+    w = World(dists={"E1": True, "E2": True, "E3": True}, limits=(2, 100, 100), cf_sums=QUIET)
+    result = w.switch.run({"action": "trip", "reason": "drill"}, NOW)
+    assert w.cw_us.calls == [] and w.cw.calls == []
+    assert result["estimate_usd"] is None and "unknown" in w.sns.published[0][1]
+    assert not any(w.cloudfront.enabled.values())
+
+
+def test_rearm_restores_apis_and_functions_before_distributions():
+    w = World(apis=["a1"], cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    log = []
+    cf, api, put = w.cloudfront.update_distribution, w.apigw.update_api, w.lambda_.put_function_concurrency
+    w.cloudfront.update_distribution = lambda **kw: log.append("cf") or cf(**kw)
+    w.apigw.update_api = lambda **kw: log.append("api") or api(**kw)
+    w.lambda_.put_function_concurrency = lambda **kw: log.append("fn") or put(**kw)
+    w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    assert log == ["api", "fn", "cf"]
+
+
+def test_a_failing_distribution_restore_leaves_the_state_tripped_and_the_backend_already_restored():
+    w = World(apis=["a1"], cf_sums=FLOOD)
+    w.switch.run({"action": "check"}, NOW)
+    w.cloudfront.update_distribution = lambda **_: (_ for _ in ()).throw(client_error_("UpdateDistribution"))
+    with pytest.raises(ClientError):
+        w.switch.run({"action": "rearm", "reason": "x"}, NOW)
+    assert w.ssm.state["status"] == "tripped"
+    assert w.apigw.disabled["a1"] is False and w.lambda_.reserved["cv-site-contact"] == 2
