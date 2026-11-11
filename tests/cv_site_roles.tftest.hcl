@@ -309,6 +309,35 @@ run "cv_site_preview_is_read_only" {
   }
 }
 
+# The cv-site roles must never touch the account-level S3 Block Public Access setting (it is a
+# baseline-owned control), and any S3 grant they hold must stay on cv-site-* buckets.
+run "cv_site_roles_cannot_change_account_public_access_block" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for role in [module.cv_site_deploy.policy, module.cv_site_preview.policy] :
+      alltrue([
+        for a in flatten([for s in jsondecode(role).Statement : s.Action if s.Effect == "Allow"]) :
+        !can(regex("^s3:.*AccountPublicAccessBlock", a))
+      ])
+    ])
+    error_message = "cv-site roles must not be granted any s3:*AccountPublicAccessBlock action."
+  }
+
+  assert {
+    condition = alltrue([
+      for role in [module.cv_site_deploy.policy, module.cv_site_preview.policy] :
+      alltrue([
+        for s in jsondecode(role).Statement :
+        alltrue([for r in flatten([s.Resource]) : startswith(r, "arn:aws:s3:::cv-site-")])
+        if s.Effect == "Allow" && anytrue([for a in flatten([s.Action]) : startswith(a, "s3:")])
+      ])
+    ])
+    error_message = "Every s3: Allow statement of the cv-site roles must be scoped to arn:aws:s3:::cv-site-* resources."
+  }
+}
+
 # The allow-list/pattern asserts above catch specific escalation shapes, but none of them pin
 # every statement's Resource. A mutation broadening ManageSiteRoles or PassSiteRolesToLambda to
 # Resource = "*", or SiteBuckets to "arn:aws:s3:::*", passed every assert above. This run follows

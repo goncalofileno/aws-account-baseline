@@ -85,7 +85,7 @@ run "baseline_plan_only_writes_the_lock_file" {
     condition = [for s in jsondecode(module.baseline_plan.policy).Statement : s.Sid] == [
       "StateList", "StateRead", "StateLock", "IamRead", "CloudTrailRead", "BudgetsRead", "TrailBucketConfigRead",
       "AnomalyDetectionRead", "KillSwitchFunctionRead", "KillSwitchTopicsRead", "KillSwitchScheduleRead",
-      "KillSwitchStateRead", "KillSwitchAlarmsRead", "KillSwitchLogsRead", "KillSwitchDescribe",
+      "KillSwitchStateRead", "KillSwitchAlarmsRead", "KillSwitchLogsRead", "KillSwitchDescribe", "AccountPublicAccessBlockRead",
     ]
     error_message = "baseline-plan policy must declare exactly these statements, in this order."
   }
@@ -130,7 +130,8 @@ run "baseline_plan_only_writes_the_lock_file" {
         Effect   = "Allow", Action = ["logs:ListTagsForResource", "logs:ListTagsLogGroup"]
         Resource = ["arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch", "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch:*"]
       }
-      KillSwitchDescribe = { Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = ["*"] }
+      KillSwitchDescribe           = { Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = ["*"] }
+      AccountPublicAccessBlockRead = { Effect = "Allow", Action = ["s3:GetAccountPublicAccessBlock"], Resource = ["*"] }
     }
     error_message = "baseline-plan policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }
@@ -157,7 +158,7 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
       "StateList", "StateReadWrite", "StateLock", "IamRead", "GithubOidcProvider", "ManagedIam",
       "CloudTrailManage", "CloudTrailRead", "Budgets", "TrailBucket", "AnomalyDetectionCreate",
       "AnomalyDetection", "KillSwitchFunction", "KillSwitchTopics", "KillSwitchSchedule", "KillSwitchState",
-      "KillSwitchAlarms", "KillSwitchLogs", "KillSwitchDescribe",
+      "KillSwitchAlarms", "KillSwitchLogs", "KillSwitchDescribe", "AccountPublicAccessBlock",
     ]
     error_message = "baseline-apply policy must declare exactly these statements, in this order."
   }
@@ -221,7 +222,8 @@ run "baseline_apply_is_scoped_to_baseline_resources" {
         Effect   = "Allow", Action = ["logs:*"]
         Resource = ["arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch", "arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/cost-kill-switch:*"]
       }
-      KillSwitchDescribe = { Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = ["*"] }
+      KillSwitchDescribe       = { Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = ["*"] }
+      AccountPublicAccessBlock = { Effect = "Allow", Action = ["s3:GetAccountPublicAccessBlock", "s3:PutAccountPublicAccessBlock"], Resource = ["*"] }
     }
     error_message = "baseline-apply policy statements must match exactly (Effect, Action, Resource) — no broadening, no extra actions or resources on any statement."
   }
