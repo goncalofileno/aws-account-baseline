@@ -455,6 +455,7 @@ def test_more_than_20_reads_in_a_run_raises_after_acting():
 def test_the_read_cap_error_leaves_the_lambda_sanitised(monkeypatch):
     w = World(dists={f"E{i}": True for i in range(7)}, cf_sums=QUIET)
     _env(monkeypatch, w.switch.c)
+    monkeypatch.setenv("MAX_DISTRIBUTIONS", "100")  # 7 distributions must not be an inventory trip here
     with pytest.raises(RuntimeError) as info:
         handler.lambda_handler({"action": "check"}, None)
     assert str(info.value) == "kill switch failed: RuntimeError"
@@ -639,21 +640,15 @@ def test_an_inventory_over_its_limit_trips_and_enforces_without_any_metric_read(
 
 
 @pytest.mark.parametrize("kwargs, limits, reason", INVENTORY_CASES)
-def test_an_inventory_trip_reads_metrics_only_after_enforcement_for_the_email(kwargs, limits, reason):
-    w = _inventory_world(kwargs, limits)
-    states = []
-    original = w.cw_us.get_metric_statistics
-
-    def checked(**kw):
-        states.append(_fully_enforced(w))
-        return original(**kw)
-
-    w.cw_us.get_metric_statistics = checked
+def test_an_inventory_trip_makes_no_metric_read_at_all_and_still_emails(kwargs, limits, reason):
+    w = _inventory_world(kwargs, limits)  # metrics are readable and a flood is there: still not read
     result = w.switch.run({"action": "check"}, NOW)
-    assert states and all(states)
-    assert result["estimate_usd"] == pytest.approx(6.0)
-    assert "USD 6.00" in w.sns.published[0][1]
-    assert w.ssm.state["estimate_usd"] is None
+    assert w.cw_us.calls == [] and w.cw.calls == []
+    assert result["status"] == "tripped" and result["estimate_usd"] is None
+    assert _fully_enforced(w)
+    assert [subject for subject, _ in w.sns.published] == ["Cost kill switch TRIPPED"]
+    body = w.sns.published[0][1]
+    assert reason in body and "unknown" in body and "inventory" in body.split("Estimated spend")[1]
 
 
 @pytest.mark.parametrize("kwargs, limits, reason", INVENTORY_CASES)

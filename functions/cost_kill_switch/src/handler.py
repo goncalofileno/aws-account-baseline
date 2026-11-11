@@ -299,12 +299,13 @@ class KillSwitch:
         # estimate only after enforcing. Everything else fails open when they can't be read.
         estimate = None
         inv = None
+        inventory_trip = False
         if action == "check" and s["status"] == st.ARMED:
             # One listing per kind per run. Over a limit trips like a manual trip: before any metric read.
             inv = self.inventory()
             breach = self.inventory_breach(inv)
             if breach is not None:
-                action, reason = "trip", breach
+                action, reason, inventory_trip = "trip", breach, True
         if action == "check" and s["status"] == st.TRIPPED:
             pass
         elif action != "trip":
@@ -330,11 +331,14 @@ class KillSwitch:
                 LOG.exception("enforcement failed during the trip")
                 enforce_error = e
             enforced = True
-            if estimate is None:
+            # An inventory trip means too many resources: reading their metrics could time the Lambda out
+            # before the alert, so it reads none at all.
+            if estimate is None and not inventory_trip:
                 estimate = self._estimate_or_none(now)  # for the email and the summary only, never saved
             self.alert(
                 "Cost kill switch TRIPPED",
-                f"Reason: {reason}\nTime: {s['tripped_at']}\nEstimated spend this month: {_usd(estimate)}\n"
+                f"Reason: {reason}\nTime: {s['tripped_at']}\nEstimated spend this month: "
+                f"{'unknown (not read: inventory trip)' if inventory_trip else _usd(estimate)}\n"
                 "The site is going offline: every CloudFront distribution is being disabled, every HTTP API's "
                 "default endpoint is being disabled and every other Lambda function's reserved concurrency "
                 f"set to 0.\n{REARM_HINT}",
