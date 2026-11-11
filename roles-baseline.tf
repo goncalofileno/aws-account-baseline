@@ -44,6 +44,7 @@ locals {
       { Sid = "KillSwitchAlarmsRead", Effect = "Allow", Action = ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"], Resource = local.kill_switch_alarm_arns },
       { Sid = "KillSwitchLogsRead", Effect = "Allow", Action = ["logs:ListTagsForResource", "logs:ListTagsLogGroup"], Resource = local.kill_switch_log_groups },
       { Sid = "KillSwitchDescribe", Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = "*" },
+      { Sid = "AccountPublicAccessBlockRead", Effect = "Allow", Action = ["s3:GetAccountPublicAccessBlock"], Resource = "*" },
     ]
   })
 
@@ -107,6 +108,8 @@ locals {
       },
       { Sid = "KillSwitchLogs", Effect = "Allow", Action = ["logs:*"], Resource = local.kill_switch_log_groups },
       { Sid = "KillSwitchDescribe", Effect = "Allow", Action = ["ssm:DescribeParameters", "logs:DescribeLogGroups"], Resource = "*" },
+      # The account-level S3 Block Public Access setting has no resource ARN, so "*" is the only Resource.
+      { Sid = "AccountPublicAccessBlock", Effect = "Allow", Action = ["s3:GetAccountPublicAccessBlock", "s3:PutAccountPublicAccessBlock"], Resource = "*" },
     ]
   })
 }
